@@ -6,7 +6,7 @@ import tkinter as tk
 from tkinter import messagebox, scrolledtext, ttk
 from typing import Optional
 
-from .auth import (
+from filttr_supervise.auth import (
     DEFAULT_ADMIN_EMAIL,
     check_trusted_device,
     checkcode,
@@ -15,10 +15,10 @@ from .auth import (
     untrust_device,
     verify_email_code,
 )
-from .config import AppConfig, load_config
-from .device import DeviceInfo, get_device_info
-from .supervise import supervise_device
-from .users import PortalUser, UnauthorizedError, lookup_user_id, search_users
+from filttr_supervise.config import AppConfig, load_config
+from filttr_supervise.device import DeviceInfo, get_device_info
+from filttr_supervise.supervise import supervise_device
+from filttr_supervise.users import PortalUser, UnauthorizedError, lookup_user_id, search_users
 
 
 class UnlockDialog(tk.Toplevel):

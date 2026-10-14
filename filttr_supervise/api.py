@@ -8,8 +8,8 @@ import urllib.parse
 import urllib.request
 from typing import Any, Optional
 
-from .auth import effective_tool_token
-from .config import AppConfig
+from filttr_supervise.auth import effective_tool_token
+from filttr_supervise.config import AppConfig
 
 logger = logging.getLogger(__name__)
 

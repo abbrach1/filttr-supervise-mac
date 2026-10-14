@@ -18,8 +18,8 @@ import urllib.request
 from dataclasses import asdict, dataclass
 from typing import Any, Optional
 
-from .auth import effective_tool_token
-from .config import AppConfig
+from filttr_supervise.auth import effective_tool_token
+from filttr_supervise.config import AppConfig
 
 logger = logging.getLogger(__name__)
 

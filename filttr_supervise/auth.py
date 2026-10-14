@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
 
-from .config import AppConfig
+from filttr_supervise.config import AppConfig
 
 logger = logging.getLogger(__name__)
 

@@ -15,8 +15,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
-from . import mbdb
-from .plist_builder import (
+from filttr_supervise import mbdb
+from filttr_supervise.plist_builder import (
     CLOUD_CONFIG_DOMAIN,
     CLOUD_CONFIG_RELATIVE_PATH,
     build_cloud_configuration_details_plist,

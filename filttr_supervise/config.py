@@ -59,7 +59,7 @@ class AppConfig:
         access_key: Optional[str] = None,
     ) -> str:
         """Expand ``{access_key}`` / ``{udid}`` placeholders in a URL template."""
-        from .plist_builder import resolve_configuration_url
+        from filttr_supervise.plist_builder import resolve_configuration_url
 
         key = access_key if access_key is not None else self.access_key
         return resolve_configuration_url(template, udid=udid, access_key=key)

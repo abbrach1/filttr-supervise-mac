@@ -23,21 +23,21 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--info", action="store_true", help="Print connected device info and exit")
     args = parser.parse_args(argv)
 
-    from .config import load_config
+    from filttr_supervise.config import load_config
 
     config = load_config(args.config)
     if getattr(args, "access_key", None):
         config.access_key = args.access_key
 
     if args.info:
-        from .device import get_device_info
+        from filttr_supervise.device import get_device_info
 
         info = get_device_info(args.udid)
         print(info.to_dict())
         return 0 if info.connected else 1
 
     if args.dry_run:
-        from .supervise import dry_run_build_backup
+        from filttr_supervise.supervise import dry_run_build_backup
 
         path = dry_run_build_backup(
             args.dry_run, config, udid=args.udid or "DRYRUN-UDID", remove=args.remove
@@ -46,7 +46,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.supervise or args.remove:
-        from .supervise import supervise_device
+        from filttr_supervise.supervise import supervise_device
 
         def progress(line: str) -> None:
             print(line)
@@ -60,7 +60,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0 if result.ok else 2
 
     # Default: GUI
-    from .gui import run_gui
+    from filttr_supervise.gui import run_gui
 
     run_gui(config)
     return 0

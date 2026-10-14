@@ -18,16 +18,16 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Optional
 
-from .api import lookup_configuration_url, post_assign_device, post_supervision_complete
-from .backup_builder import build_supervision_backup
-from .config import AppConfig, load_config
-from .device import DeviceInfo, get_device_info
-from .plist_builder import (
+from filttr_supervise.api import lookup_configuration_url, post_assign_device, post_supervision_complete
+from filttr_supervise.backup_builder import build_supervision_backup
+from filttr_supervise.config import AppConfig, load_config
+from filttr_supervise.device import DeviceInfo, get_device_info
+from filttr_supervise.plist_builder import (
     build_cloud_configuration,
     build_removal_configuration,
     load_supervisor_cert_der,
 )
-from .safety import (
+from filttr_supervise.safety import (
     WipeForbiddenError,
     validate_device_for_supervise,
     wrap_forbid_erase,

@@ -30,8 +30,8 @@ datas += tmp_ret[0]
 hiddenimports += tmp_ret[2]
 
 a = Analysis(
-    ['filttr_supervise/__main__.py'],
-    pathex=[],
+    ['run_app.py'],
+    pathex=['.'],
     binaries=[],
     datas=datas,
     hiddenimports=hiddenimports,
