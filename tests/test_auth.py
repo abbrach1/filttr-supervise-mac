@@ -19,7 +19,7 @@ from filttr_supervise.config import load_config
 
 def _cfg(tmp_path: Path):
     p = tmp_path / "config.json"
-    p.write_text(json.dumps({"api_base": "https://filttr.org"}))
+    p.write_text(json.dumps({"api_base": "https://www.filttr.org"}))
     return load_config(p)
 
 

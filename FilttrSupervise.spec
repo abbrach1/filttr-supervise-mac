@@ -20,6 +20,8 @@ hiddenimports = collect_submodules('pymobiledevice3') + [
     'filttr_supervise.mbdb',
     'filttr_supervise.config',
     'filttr_supervise.api',
+    'filttr_supervise.users',
+    'filttr_supervise.auth',
     'cryptography',
     'tkinter',
 ]
@@ -58,7 +60,7 @@ exe = EXE(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
+    upx=False,
     upx_exclude=[],
     runtime_tmpdir=None,
     console=False,  # GUI app; use --supervise from a console build if needed

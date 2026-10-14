@@ -109,7 +109,7 @@ def search_users(
     path = (config.users_search_path or DEFAULT_SEARCH_PATH).strip()
     if not path.startswith("/"):
         path = "/" + path
-    base = (config.api_base or "https://filttr.org").rstrip("/")
+    base = (config.api_base or "https://www.filttr.org").rstrip("/")
     token = effective_tool_token(config)
     url = f"{base}{path}?q={urllib.parse.quote(q)}"
     if token:
@@ -145,7 +145,7 @@ def lookup_user_id(
     if not uid:
         return None, "Enter a User ID."
     path = "/api/lookup"
-    base = (config.api_base or "https://filttr.org").rstrip("/")
+    base = (config.api_base or "https://www.filttr.org").rstrip("/")
     token = effective_tool_token(config)
     url = f"{base}{path}?userId={urllib.parse.quote(uid)}"
     if token:

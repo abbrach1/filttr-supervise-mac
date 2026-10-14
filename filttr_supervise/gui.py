@@ -132,7 +132,8 @@ class FilttrSuperviseApp(tk.Tk):
         self._selected: Optional[PortalUser] = None
         self._results: list[PortalUser] = []
         self._build()
-        self.after(100, self._startup_unlock)
+        # Sign-in is optional for now: never block on unlock at launch.
+        self.after(100, self._startup_check_trust)
         self.after(300, self.refresh_device)
         self._update_supervise_enabled()
 
@@ -143,9 +144,9 @@ class FilttrSuperviseApp(tk.Tk):
 
         top = ttk.Frame(frm)
         top.pack(fill=tk.X, **pad)
-        self.lbl_lock = ttk.Label(top, text="Locked", font=("", 10, "bold"))
+        self.lbl_lock = ttk.Label(top, text="Not signed in (optional)", font=("", 10, "bold"))
         self.lbl_lock.pack(side=tk.LEFT)
-        ttk.Button(top, text="Unlock…", command=self.open_unlock).pack(side=tk.LEFT, padx=6)
+        ttk.Button(top, text="Sign in (optional)…", command=self.open_unlock).pack(side=tk.LEFT, padx=6)
         ttk.Button(top, text="Sign out / untrust this PC", command=self.on_sign_out).pack(
             side=tk.LEFT, padx=4
         )
@@ -223,18 +224,24 @@ class FilttrSuperviseApp(tk.Tk):
         self.log = scrolledtext.ScrolledText(logf, height=11, state=tk.DISABLED, wrap=tk.WORD)
         self.log.pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
 
-    def _startup_unlock(self) -> None:
-        ok, msg = check_trusted_device(self.config_data)
-        self.append_log(msg)
+    def _startup_check_trust(self) -> None:
+        """Silently reuse a trusted-PC session if one exists; never prompt."""
+        try:
+            ok, msg = check_trusted_device(self.config_data)
+            if ok:
+                self.append_log(msg)
+        except Exception:
+            pass
         self._refresh_lock_label()
-        if not ok and not effective_tool_token(self.config_data):
-            self.open_unlock()
+        self.append_log(
+            "Sign-in not required. Search users or paste an access key, then Supervise."
+        )
 
     def _refresh_lock_label(self) -> None:
         if effective_tool_token(self.config_data):
             self.lbl_lock.configure(text="Unlocked")
         else:
-            self.lbl_lock.configure(text="Locked")
+            self.lbl_lock.configure(text="Not signed in (optional)")
 
     def open_unlock(self) -> None:
         dlg = UnlockDialog(self, self.config_data)
@@ -259,7 +266,7 @@ class FilttrSuperviseApp(tk.Tk):
         tok = "yes" if effective_tool_token(self.config_data) else "no"
         self.lbl_cfg.configure(
             text=(
-                f"Unlocked: {tok}  |  Does NOT erase the phone (sparse MobileBackup2 only)\n"
+                f"Signed in: {tok} (optional)  |  Does NOT erase the phone (sparse MobileBackup2 only)\n"
                 f"ConfigurationURL: {preview or '(select a user or paste access key)'}"
             )
         )
@@ -291,8 +298,11 @@ class FilttrSuperviseApp(tk.Tk):
 
     def _handle_auth_msg(self, msg: str) -> bool:
         if "unauthorized" in msg.lower() or "unlock the tool" in msg.lower():
-            messagebox.showwarning("Unlock required", msg)
-            self.open_unlock()
+            self.lbl_search_status.configure(
+                text="Search needs sign-in on the server. Paste the user's access key "
+                "below to supervise, or use Sign in (optional)."
+            )
+            self.entry_access_key.focus_set()
             return True
         return False
 

@@ -8,7 +8,7 @@ from filttr_supervise.config import DEFAULT_ENROLLMENT_URL_TEMPLATE, load_config
 
 def test_load_defaults(tmp_path: Path) -> None:
     cfg = load_config(tmp_path / "missing.json")
-    assert cfg.api_base == "https://filttr.org"
+    assert cfg.api_base == "https://www.filttr.org"
     assert cfg.organization_name == "Filttr"
     assert cfg.complete_path == "/api/supervision/complete"
     assert cfg.is_mdm_unremovable is True
@@ -28,7 +28,7 @@ def test_enrollment_template_requires_access_key(tmp_path: Path) -> None:
     assert cfg.require_access_key() is None
     assert (
         cfg.configuration_url_for()
-        == "https://filttr.org/api/mdm-enroll?k=abcKEY&cfg=1"
+        == "https://www.filttr.org/api/mdm-enroll?k=abcKEY&cfg=1"
     )
 
 
@@ -52,9 +52,9 @@ def test_udid_template_still_works(tmp_path: Path) -> None:
         json.dumps(
             {
                 "enrollment_url_template": "",
-                "configuration_url_template": "https://filttr.org/enroll/{udid}",
+                "configuration_url_template": "https://www.filttr.org/enroll/{udid}",
             }
         )
     )
     cfg = load_config(p)
-    assert cfg.configuration_url_for("ABC123") == "https://filttr.org/enroll/ABC123"
+    assert cfg.configuration_url_for("ABC123") == "https://www.filttr.org/enroll/ABC123"

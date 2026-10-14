@@ -24,7 +24,7 @@ def test_search_requires_token(tmp_path) -> None:
 
 def test_search_parses_ok_response(tmp_path) -> None:
     p = tmp_path / "config.json"
-    p.write_text(json.dumps({"tool_token": "tok123", "api_base": "https://filttr.org"}))
+    p.write_text(json.dumps({"tool_token": "tok123", "api_base": "https://www.filttr.org"}))
     # also exercise session_token preference
 
     cfg = load_config(p)

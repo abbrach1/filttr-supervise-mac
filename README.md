@@ -47,9 +47,9 @@ Hard guards refuse to run if Find My is on or the device is not Activated. A run
 
 | Key | Default | Notes |
 |-----|---------|--------|
-| `api_base` | `https://filttr.org` | Filttr API origin |
+| `api_base` | `https://www.filttr.org` | Filttr API origin |
 | `access_key` | `""` | **Required for Supervise** — portal user key (`k`); also enterable in the GUI |
-| `enrollment_url_template` | `https://filttr.org/api/mdm-enroll?k={access_key}&cfg=1` | Expanded into `ConfigurationURL` (USB / supervised, non-removable MDM via `cfg=1`) |
+| `enrollment_url_template` | `https://www.filttr.org/api/mdm-enroll?k={access_key}&cfg=1` | Expanded into `ConfigurationURL` (USB / supervised, non-removable MDM via `cfg=1`) |
 | `enrollment_url` | `""` | Optional static override / display URL |
 | `configuration_url` | `""` | Optional explicit `ConfigurationURL` (wins over template) |
 | `configuration_url_template` | `""` | Optional alternate template (`{udid}` / `{access_key}`) |
@@ -86,7 +86,7 @@ Default admin email prefill: `abbrachfeld@gmail.com` (editable).
 3. The app calls `GET {api_base}/api/search-users?q=…` with header `x-tool-token` (also `?token=`).
 4. Response shape: `{ "ok": true, "users": [ { "userId", "name", "accessKey" } ] }` (max 25).
 5. Selecting a row sets `access_key` from `accessKey`, shows **name + userId**, and builds  
-   `https://filttr.org/api/mdm-enroll?k={accessKey}&cfg=1` as `ConfigurationURL`.
+   `https://www.filttr.org/api/mdm-enroll?k={accessKey}&cfg=1` as `ConfigurationURL`.
 6. **Supervise** stays disabled until a user is selected or an access key is pasted (fallback).
 7. After success, POSTs `/api/supervision/complete` (and best-effort `/api/supervision/assign`) with udid + user. MDM check-in URLs are also tagged `?eu=<k>` by `/api/mdm-enroll`.
 

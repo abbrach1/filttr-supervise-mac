@@ -9,11 +9,11 @@ from typing import Any, Optional
 # USB / Configurator-style enroll uses cfg=1 (PayloadRemovalDisallowed).
 # k= is the portal access key (Firestore portals/{k}).
 DEFAULT_ENROLLMENT_URL_TEMPLATE = (
-    "https://filttr.org/api/mdm-enroll?k={access_key}&cfg=1"
+    "https://www.filttr.org/api/mdm-enroll?k={access_key}&cfg=1"
 )
 
 DEFAULT_CONFIG: dict[str, Any] = {
-    "api_base": "https://filttr.org",
+    "api_base": "https://www.filttr.org",
     "access_key": "",
     "enrollment_url": "",
     "enrollment_url_template": DEFAULT_ENROLLMENT_URL_TEMPLATE,
@@ -33,7 +33,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
 
 @dataclass
 class AppConfig:
-    api_base: str = "https://filttr.org"
+    api_base: str = "https://www.filttr.org"
     access_key: str = ""
     enrollment_url: str = ""
     enrollment_url_template: str = DEFAULT_ENROLLMENT_URL_TEMPLATE

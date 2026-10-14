@@ -1,9 +1,9 @@
 {
-  "api_base": "https://filttr.org",
+  "api_base": "https://www.filttr.org",
   "access_key": "",
   "api_token": "",
   "enrollment_url": "",
-  "enrollment_url_template": "https://filttr.org/api/mdm-enroll?k={access_key}&cfg=1",
+  "enrollment_url_template": "https://www.filttr.org/api/mdm-enroll?k={access_key}&cfg=1",
   "organization_name": "Filttr",
   "is_mdm_unremovable": true,
   "complete_path": "/api/supervision/complete",
