@@ -1,0 +1,44 @@
+name: Build FilttrSupervise.exe
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Unit tests
+        run: python -m pytest -q
+
+      - name: PyInstaller (one-file windowed)
+        run: pyinstaller --noconfirm FilttrSupervise.spec
+
+      - name: Stage release folder
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path release | Out-Null
+          Copy-Item dist/FilttrSupervise.exe release/
+          Copy-Item config.json release/
+          Copy-Item README.md release/
+          if (Test-Path assets) { Copy-Item -Recurse assets release/assets }
+
+      - name: Upload exe bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: FilttrSupervise-windows
+          path: release/

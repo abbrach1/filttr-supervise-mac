@@ -1,0 +1,17 @@
+{
+  "api_base": "https://filttr.org",
+  "access_key": "",
+  "api_token": "",
+  "enrollment_url": "",
+  "enrollment_url_template": "https://filttr.org/api/mdm-enroll?k={access_key}&cfg=1",
+  "organization_name": "Filttr",
+  "is_mdm_unremovable": true,
+  "complete_path": "/api/supervision/complete",
+  "assign_path": "/api/supervision/assign",
+  "users_search_path": "/api/search-users",
+  "configuration_url": "",
+  "configuration_url_template": "",
+  "supervisor_cert": "assets/filttr-supervisor.der",
+  "method": "backup_restore",
+  "tool_token": ""
+}
