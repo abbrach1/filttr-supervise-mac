@@ -483,12 +483,18 @@ class FilttrSuperviseApp(tk.Tk):
             def progress(line: str) -> None:
                 self.after(0, lambda l=line: self.append_log(l))
 
-            result = supervise_device(
-                self.config_data,
-                remove=remove,
-                progress=progress,
-                selected_user=selected,
-            )
+            try:
+                result = supervise_device(
+                    self.config_data,
+                    remove=remove,
+                    progress=progress,
+                    selected_user=selected,
+                )
+            except Exception as exc:  # never leave the GUI stuck busy
+                from filttr_supervise.supervise import SuperviseResult
+
+                result = SuperviseResult(ok=False, message=f"Unexpected error: {exc}")
+                progress(result.message)
 
             def done() -> None:
                 self._set_busy(False)

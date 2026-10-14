@@ -2,4 +2,4 @@
 
 Non-destructive supervision (no wipe) using pymobiledevice3.
 """
-__version__ = "0.1.2"
+__version__ = "0.1.3"

@@ -64,22 +64,34 @@ async def _read_device_async(udid: Optional[str] = None) -> DeviceInfo:
     else:
         target = devices[0]
 
-    try:
-        lockdown = await create_using_usbmux(
-            serial=getattr(target, "serial", None),
-            autopair=False,
-        )
-    except Exception:
+    serial = getattr(target, "serial", None)
+    lockdown = None
+    last_exc: Optional[BaseException] = None
+    # Never autopair here (that blocks on the Trust dialog). The pairing step
+    # lives in supervise._connect_and_pair with explicit timeouts.
+    for attempt in range(3):
         try:
-            lockdown = await create_using_usbmux(
-                serial=getattr(target, "serial", None),
-                autopair=True,
+            lockdown = await asyncio.wait_for(
+                create_using_usbmux(serial=serial, autopair=False), timeout=20
             )
-        except Exception as exc2:
-            info.error = f"Lockdown connection failed: {exc2}"
-            info.connected = True
-            info.udid = getattr(target, "serial", "") or ""
-            return info
+            break
+        except asyncio.TimeoutError:
+            last_exc = TimeoutError("lockdown connect timed out (20s)")
+        except Exception as exc:
+            last_exc = exc
+            if "SessionActive" in type(exc).__name__ or "SessionActive" in str(exc):
+                await asyncio.sleep(2)
+                continue
+            break
+    if lockdown is None:
+        info.error = f"Lockdown connection failed: {last_exc}"
+        info.connected = True
+        info.udid = serial or ""
+        if last_exc is not None and "SessionActive" in (type(last_exc).__name__ + str(last_exc)):
+            info.notes.append(
+                "SessionActive: close iTunes / Apple Devices app and retry."
+            )
+        return info
 
     info.connected = True
     values: dict[str, Any] = {}
@@ -115,17 +127,17 @@ async def _read_device_async(udid: Optional[str] = None) -> DeviceInfo:
     info.model = str(values.get("HardwareModel") or "")
     info.activation_state = str(values.get("ActivationState") or "")
 
-    try:
-        info.paired = bool(await lockdown.validate_pairing())
-        info.trusted = info.paired
-    except Exception as exc:
-        info.paired = False
-        info.trusted = False
-        info.notes.append(f"Pairing not validated: {exc}")
+    # create_using_usbmux already ran validate_pairing() and started a session
+    # when a valid pair record exists; calling it again yields SessionActive.
+    info.paired = bool(getattr(lockdown, "paired", False))
+    info.trusted = info.paired
+    if not info.paired:
+        info.notes.append("Not paired yet — unlock the iPhone and tap Trust when prompted.")
 
     try:
-        will_enc = await lockdown.get_value(
-            domain="com.apple.mobile.backup", key="WillEncrypt"
+        will_enc = await asyncio.wait_for(
+            lockdown.get_value(domain="com.apple.mobile.backup", key="WillEncrypt"),
+            timeout=10,
         )
         info.will_encrypt_backup = bool(will_enc)
     except Exception:
@@ -134,8 +146,14 @@ async def _read_device_async(udid: Optional[str] = None) -> DeviceInfo:
     try:
         from pymobiledevice3.services.mobile_config import MobileConfigService
 
-        async with MobileConfigService(lockdown) as mc:
-            cloud = await mc.get_cloud_configuration()
+        if not info.paired:
+            raise RuntimeError("device not paired")
+
+        async def _cloud() -> Any:
+            async with MobileConfigService(lockdown) as mc:
+                return await mc.get_cloud_configuration()
+
+        cloud = await asyncio.wait_for(_cloud(), timeout=15)
         info.cloud_configuration = cloud
         if isinstance(cloud, dict):
             info.supervised = bool(cloud.get("IsSupervised"))
@@ -147,7 +165,7 @@ async def _read_device_async(udid: Optional[str] = None) -> DeviceInfo:
     info.find_my_enabled = _guess_find_my(values, info.cloud_configuration)
 
     try:
-        await lockdown.close()
+        await asyncio.wait_for(lockdown.close(), timeout=5)
     except Exception:
         pass
     return info

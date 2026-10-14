@@ -56,6 +56,148 @@ SAFE_RESTORE_KWARGS = {
     "source": ".",
 }
 
+# Step timeouts (seconds). Every device await is bounded — the tool must never hang.
+CONNECT_TIMEOUT = 20
+DEVICE_INFO_TIMEOUT = 90
+PAIR_TOTAL_TIMEOUT = 60
+PAIR_ATTEMPT_TIMEOUT = 10
+VALIDATE_TIMEOUT = 15
+RESTORE_START_TIMEOUT = 30
+RESTORE_TIMEOUT = 180
+REBOOT_TIMEOUT = 20
+CLOSE_TIMEOUT = 5
+SESSION_ACTIVE_RETRIES = 3
+
+
+class DeviceStepError(Exception):
+    """A device step failed with a user-facing message."""
+
+
+def _is_session_active(exc: BaseException) -> bool:
+    return "SessionActive" in type(exc).__name__ or "SessionActive" in str(exc)
+
+
+def _is_pair_pending(exc: BaseException) -> bool:
+    text = type(exc).__name__ + " " + str(exc)
+    return any(
+        k in text
+        for k in ("PasswordProtected", "PairingDialogResponsePending", "DialogResponsePending")
+    )
+
+
+def _is_user_denied(exc: BaseException) -> bool:
+    text = type(exc).__name__ + " " + str(exc)
+    return "UserDenied" in text
+
+
+async def _safe_close(lockdown: Any) -> None:
+    if lockdown is None:
+        return
+    try:
+        await asyncio.wait_for(lockdown.close(), timeout=CLOSE_TIMEOUT)
+    except Exception:
+        pass
+
+
+async def _connect_and_pair(
+    udid: str, result: "SuperviseResult", cb: Optional[ProgressCb]
+) -> Any:
+    """Open lockdown and ensure the host is paired, with bounded waits.
+
+    Raises DeviceStepError with a clear message on failure.
+    """
+    from pymobiledevice3.lockdown import create_using_usbmux
+
+    lockdown = None
+    for attempt in range(1, SESSION_ACTIVE_RETRIES + 1):
+        result.emit(f"Connecting to iPhone (lockdown, attempt {attempt})…", cb)
+        try:
+            lockdown = await asyncio.wait_for(
+                create_using_usbmux(serial=udid, autopair=False),
+                timeout=CONNECT_TIMEOUT,
+            )
+            break
+        except asyncio.TimeoutError:
+            raise DeviceStepError(
+                f"Connecting to the iPhone timed out after {CONNECT_TIMEOUT}s. "
+                "Unplug/replug the cable and retry."
+            )
+        except Exception as exc:
+            if _is_session_active(exc) and attempt < SESSION_ACTIVE_RETRIES:
+                result.emit(
+                    "Device reports SessionActive — another app holds a session. "
+                    "Close iTunes / the Apple Devices app; retrying in 3s…",
+                    cb,
+                )
+                await asyncio.sleep(3)
+                continue
+            if _is_session_active(exc):
+                raise DeviceStepError(
+                    "SessionActive: another program (iTunes / Apple Devices) is "
+                    "talking to the iPhone. Close it, unplug/replug, and retry."
+                )
+            raise DeviceStepError(f"Lockdown connection failed: {exc}")
+
+    if getattr(lockdown, "paired", False):
+        result.emit("Paired OK (existing trust record).", cb)
+        return lockdown
+
+    result.emit("Unlock the iPhone and tap Trust, then enter the passcode…", cb)
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + PAIR_TOTAL_TIMEOUT
+    last_note = ""
+    try:
+        while True:
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                raise DeviceStepError(
+                    f"Pairing not accepted within {PAIR_TOTAL_TIMEOUT}s. Unlock the "
+                    "iPhone, tap Trust, enter the passcode, then press Supervise again."
+                )
+            try:
+                await asyncio.wait_for(
+                    lockdown.pair(timeout=0), timeout=min(PAIR_ATTEMPT_TIMEOUT, remaining)
+                )
+                break
+            except asyncio.TimeoutError:
+                note = "Waiting for Trust…"
+            except Exception as exc:
+                if _is_user_denied(exc):
+                    raise DeviceStepError(
+                        "Trust was denied on the iPhone. Unplug/replug and tap Trust."
+                    )
+                if _is_session_active(exc):
+                    raise DeviceStepError(
+                        "SessionActive during pairing: close iTunes / Apple Devices and retry."
+                    )
+                if not _is_pair_pending(exc):
+                    raise DeviceStepError(f"Pairing failed: {exc}")
+                if "PasswordProtected" in type(exc).__name__ + str(exc):
+                    note = "iPhone is locked — unlock it (enter passcode) and tap Trust…"
+                else:
+                    note = "Trust dialog pending — tap Trust and enter the passcode…"
+            if note != last_note:
+                result.emit(note, cb)
+                last_note = note
+            await asyncio.sleep(2)
+
+        try:
+            ok = await asyncio.wait_for(lockdown.validate_pairing(), timeout=VALIDATE_TIMEOUT)
+        except asyncio.TimeoutError:
+            raise DeviceStepError("Validating the new pairing timed out.")
+        except Exception as exc:
+            if _is_session_active(exc):
+                ok = bool(getattr(lockdown, "paired", False))
+            else:
+                raise DeviceStepError(f"Pairing validation failed: {exc}")
+        if not ok:
+            raise DeviceStepError("Pairing could not be validated — retry Supervise.")
+        result.emit("Paired OK.", cb)
+        return lockdown
+    except BaseException:
+        await _safe_close(lockdown)
+        raise
+
 
 @dataclass
 class SuperviseResult:
@@ -148,15 +290,55 @@ async def _restore_via_backup(
             f"(kwargs={SAFE_RESTORE_KWARGS}) — does NOT erase user data…",
             cb,
         )
+        def _on_progress(pct: Any) -> None:
+            try:
+                p = float(pct)
+            except (TypeError, ValueError):
+                return
+            bucket = int(p // 10) * 10
+            if bucket > state["last"]:
+                state["last"] = bucket
+                result.emit(f"Restore progress: {p:.0f}%", cb)
+
+        state = {"last": -1}
         try:
-            async with Mobilebackup2Service(lockdown) as mb:
+            result.emit("Starting MobileBackup2…", cb)
+            mb_cm = Mobilebackup2Service(lockdown)
+            try:
+                mb = await asyncio.wait_for(mb_cm.__aenter__(), timeout=RESTORE_START_TIMEOUT)
+            except asyncio.TimeoutError:
+                result.emit(
+                    f"Starting MobileBackup2 timed out after {RESTORE_START_TIMEOUT}s.", cb
+                )
+                return False
+            try:
                 wrap_forbid_erase(mb, "erase_device")
-                await mb.restore(backup_root, **SAFE_RESTORE_KWARGS)
+                result.emit("If the phone asks for its passcode, enter it now.", cb)
+                await asyncio.wait_for(
+                    mb.restore(
+                        backup_root, progress_callback=_on_progress, **SAFE_RESTORE_KWARGS
+                    ),
+                    timeout=RESTORE_TIMEOUT,
+                )
+            finally:
+                try:
+                    await asyncio.wait_for(
+                        mb_cm.__aexit__(None, None, None), timeout=CLOSE_TIMEOUT
+                    )
+                except Exception:
+                    pass
             result.emit("MobileBackup2 restore finished.", cb)
             result.method = "backup_restore"
             if reboot:
                 await _reboot(lockdown, result, cb)
             return True
+        except asyncio.TimeoutError:
+            result.emit(
+                f"MobileBackup2 restore timed out after {RESTORE_TIMEOUT}s. If the phone "
+                "asked for a passcode, enter it and retry; close iTunes / Apple Devices.",
+                cb,
+            )
+            return False
         except WipeForbiddenError:
             raise
         except (ConnectionTerminatedError, ssl.SSLEOFError, ConnectionAbortedError, ConnectionResetError) as exc:
@@ -188,10 +370,14 @@ async def _reboot(lockdown: Any, result: SuperviseResult, cb: Optional[ProgressC
         from pymobiledevice3.services.diagnostics import DiagnosticsService
 
         result.emit("Requesting device reboot (restart, not erase)…", cb)
-        async with DiagnosticsService(lockdown) as diag:
-            # Guard: diagnostics must not expose an erase we accidentally call
-            wrap_forbid_erase(diag, "erase_device")
-            await diag.restart()
+        async def _do() -> None:
+            async with DiagnosticsService(lockdown) as diag:
+                # Guard: diagnostics must not expose an erase we accidentally call
+                wrap_forbid_erase(diag, "erase_device")
+                await diag.restart()
+
+        await asyncio.wait_for(_do(), timeout=REBOOT_TIMEOUT)
+        result.emit("Reboot requested.", cb)
     except Exception as exc:
         result.emit(
             f"Reboot request note: {exc} (device may still reboot on its own)",
@@ -237,7 +423,18 @@ async def _run_supervise_async(
         result.emit(f"Dry-run backup written to {path}", progress)
         return result
 
-    info = get_device_info(udid)
+    result.emit("Reading device info…", progress)
+    try:
+        info = await asyncio.wait_for(
+            asyncio.to_thread(get_device_info, udid), timeout=DEVICE_INFO_TIMEOUT
+        )
+    except asyncio.TimeoutError:
+        result.message = (
+            f"Reading device info timed out after {DEVICE_INFO_TIMEOUT}s — "
+            "unplug/replug, close iTunes / Apple Devices, and retry."
+        )
+        result.emit(result.message, progress)
+        return result
     result.device = info
     if not info.connected or not info.udid:
         result.message = info.error or "No device connected"
@@ -247,7 +444,9 @@ async def _run_supervise_async(
     blockers = validate_device_for_supervise(
         find_my_enabled=info.find_my_enabled,
         activation_state=info.activation_state,
-        paired=info.paired,
+        # Pairing is performed explicitly below (with timeouts), so it is not a
+        # pre-blocker here.
+        paired=True,
     )
     if blockers:
         result.message = blockers[0]
@@ -294,9 +493,14 @@ async def _run_supervise_async(
             progress,
         )
 
-    from pymobiledevice3.lockdown import create_using_usbmux
-
-    lockdown = await create_using_usbmux(serial=info.udid, autopair=True)
+    if not info.paired:
+        result.emit("Pairing state: not paired / not trusted yet.", progress)
+    try:
+        lockdown = await _connect_and_pair(info.udid, result, progress)
+    except DeviceStepError as exc:
+        result.message = str(exc)
+        result.emit(result.message, progress)
+        return result
     success = False
     try:
         success = await _restore_via_backup(
@@ -332,10 +536,7 @@ async def _run_supervise_async(
                 )
                 result.emit(msg_a, progress)
     finally:
-        try:
-            await lockdown.close()
-        except Exception:
-            pass
+        await _safe_close(lockdown)
 
     result.ok = success
     result.message = (
