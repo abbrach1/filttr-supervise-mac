@@ -2,7 +2,12 @@
 $ErrorActionPreference = 'Stop'
 Set-Location $PSScriptRoot
 $sw = [Diagnostics.Stopwatch]::StartNew()
-python -m PyInstaller --noconfirm FilttrSupervise.spec
+$py = "$env:LOCALAPPDATA\Programs\Python\Python312\python.exe"
+if (-not (Test-Path $py)) { $py = (Get-Command python -EA Stop).Source }
+$ErrorActionPreference = 'Continue'
+& $py -m PyInstaller --noconfirm FilttrSupervise.spec 2>&1 | Out-Host
+if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed ($LASTEXITCODE)" }
+$ErrorActionPreference = 'Stop'
 $ver = (Select-String -Path filttr_supervise\__init__.py -Pattern '__version__ = "(.+)"').Matches[0].Groups[1].Value
 $zip = Join-Path ([Environment]::GetFolderPath('Desktop')) "FilttrSupervise-v$ver-windows.zip"
 if (Test-Path $zip) { Remove-Item $zip }
