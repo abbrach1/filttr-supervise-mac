@@ -43,9 +43,9 @@ async def _read_device_async(udid: Optional[str] = None) -> DeviceInfo:
         return info
 
     try:
-        devices = await list_devices()
+        devices = await asyncio.wait_for(list_devices(), timeout=10)
     except Exception as exc:
-        info.error = f"usbmux list failed: {exc}"
+        info.error = usbmux_error_message(exc)
         return info
 
     if not devices:
@@ -171,6 +171,26 @@ async def _read_device_async(udid: Optional[str] = None) -> DeviceInfo:
     return info
 
 
+def usbmux_error_message(exc: BaseException) -> str:
+    """User-facing message for a failure to reach usbmuxd."""
+    import sys
+
+    text = f"{type(exc).__name__}: {exc}"
+    unreachable = any(
+        k in text
+        for k in ("ConnectionFailedToUsbmuxd", "ConnectionRefused", "10061", "No such file", "TimeoutError")
+    ) or isinstance(exc, (ConnectionRefusedError, FileNotFoundError, asyncio.TimeoutError))
+    if unreachable:
+        if sys.platform.startswith("win"):
+            return (
+                "Cannot reach the Apple Mobile Device Service (usbmuxd). Install the "
+                "'Apple Devices' app (Microsoft Store) or iTunes, make sure the 'Apple "
+                "Mobile Device Service' is running (services.msc), then replug the iPhone."
+            )
+        return "Cannot reach usbmuxd — install/start usbmuxd and replug the iPhone."
+    return f"usbmux list failed: {text}"
+
+
 def _guess_find_my(
     values: dict[str, Any], cloud: Optional[dict[str, Any]]
 ) -> Optional[bool]:
@@ -195,7 +215,7 @@ def get_device_info(udid: Optional[str] = None) -> DeviceInfo:
 async def _list_udids_async() -> list[str]:
     from pymobiledevice3.usbmux import list_devices
 
-    devices = await list_devices()
+    devices = await asyncio.wait_for(list_devices(), timeout=10)
     return [getattr(d, "serial", str(d)) for d in devices]
 
 

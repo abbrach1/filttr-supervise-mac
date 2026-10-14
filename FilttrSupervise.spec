@@ -22,6 +22,10 @@ hiddenimports = collect_submodules('pymobiledevice3') + [
     'filttr_supervise.api',
     'filttr_supervise.users',
     'filttr_supervise.auth',
+    'filttr_supervise.safety',
+    'filttr_supervise.watcher',
+    'filttr_supervise.__main__',
+    'asyncio',
     'cryptography',
     'tkinter',
 ]

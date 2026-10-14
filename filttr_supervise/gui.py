@@ -18,6 +18,7 @@ from filttr_supervise.auth import (
 from filttr_supervise.config import AppConfig, load_config
 from filttr_supervise.device import DeviceInfo, get_device_info
 from filttr_supervise.supervise import supervise_device
+from filttr_supervise.watcher import DeviceWatcher
 from filttr_supervise.users import PortalUser, UnauthorizedError, lookup_user_id, search_users
 
 
@@ -89,12 +90,42 @@ class UnlockDialog(tk.Toplevel):
         self.btn_send.configure(state=state)
         self.chk_trust.configure(state=state)
 
+    def _bg(self, fn, on_done) -> None:
+        """Run blocking network call off the Tk thread."""
+        self.lbl.configure(text="Working…")
+
+        def work() -> None:
+            try:
+                res = fn()
+            except Exception as exc:
+                res = exc
+
+            def done() -> None:
+                try:
+                    if self.winfo_exists():
+                        on_done(res)
+                except tk.TclError:
+                    pass
+
+            try:
+                self.after(0, done)
+            except (tk.TclError, RuntimeError):
+                pass
+
+        threading.Thread(target=work, daemon=True).start()
+
     def _send(self) -> None:
         email = self.var_email.get().strip()
-        ok, msg = send_email_code(self.config_data, email)
-        self.lbl.configure(text=msg)
-        if not ok:
-            messagebox.showerror("Send failed", msg, parent=self)
+
+        def done(res) -> None:
+            if isinstance(res, Exception):
+                res = (False, f"Send failed: {res}")
+            ok, msg = res
+            self.lbl.configure(text=msg)
+            if not ok:
+                messagebox.showerror("Send failed", msg, parent=self)
+
+        self._bg(lambda: send_email_code(self.config_data, email), done)
 
     def _unlock(self) -> None:
         email = self.var_email.get().strip()
@@ -102,18 +133,26 @@ class UnlockDialog(tk.Toplevel):
         if not code:
             messagebox.showerror("Code required", "Enter the code.", parent=self)
             return
-        if self.mode.get() == "admin":
-            ok, msg, _tok = checkcode(self.config_data, email, code)
-        else:
-            ok, msg, _tok = verify_email_code(
-                self.config_data, email, code, trust=self.var_trust.get()
-            )
-        self.lbl.configure(text=msg)
-        if ok:
-            self.result_ok = True
-            self.destroy()
-        else:
-            messagebox.showerror("Unlock failed", msg, parent=self)
+        admin = self.mode.get() == "admin"
+        trust = self.var_trust.get()
+
+        def call():
+            if admin:
+                return checkcode(self.config_data, email, code)
+            return verify_email_code(self.config_data, email, code, trust=trust)
+
+        def done(res) -> None:
+            if isinstance(res, Exception):
+                res = (False, f"Unlock failed: {res}", None)
+            ok, msg, _tok = res
+            self.lbl.configure(text=msg)
+            if ok:
+                self.result_ok = True
+                self.destroy()
+            else:
+                messagebox.showerror("Unlock failed", msg, parent=self)
+
+        self._bg(call, done)
 
     def _cancel(self) -> None:
         self.result_ok = False
@@ -134,8 +173,23 @@ class FilttrSuperviseApp(tk.Tk):
         self._build()
         # Sign-in is optional for now: never block on unlock at launch.
         self.after(100, self._startup_check_trust)
-        self.after(300, self.refresh_device)
+        self._watcher = DeviceWatcher(self._on_watcher_info)
+        self.after(300, self._watcher.start)
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
         self._update_supervise_enabled()
+
+    def _on_close(self) -> None:
+        try:
+            self._watcher.stop()
+        finally:
+            self.destroy()
+
+    def _on_watcher_info(self, info: DeviceInfo) -> None:
+        """Called on the watcher thread — marshal to Tk via after()."""
+        try:
+            self.after(0, lambda: None if self._busy else self._apply_device(info))
+        except (tk.TclError, RuntimeError):
+            pass
 
     def _build(self) -> None:
         pad = {"padx": 8, "pady": 4}
@@ -226,13 +280,20 @@ class FilttrSuperviseApp(tk.Tk):
 
     def _startup_check_trust(self) -> None:
         """Silently reuse a trusted-PC session if one exists; never prompt."""
-        try:
-            ok, msg = check_trusted_device(self.config_data)
-            if ok:
-                self.append_log(msg)
-        except Exception:
-            pass
-        self._refresh_lock_label()
+        def work() -> None:
+            try:
+                ok, msg = check_trusted_device(self.config_data)
+            except Exception:
+                ok, msg = False, ""
+
+            def done() -> None:
+                if ok and msg:
+                    self.append_log(msg)
+                self._refresh_lock_label()
+
+            self.after(0, done)
+
+        threading.Thread(target=work, daemon=True).start()
         self.append_log(
             "Sign-in not required. Search users or paste an access key, then Supervise."
         )
@@ -252,9 +313,19 @@ class FilttrSuperviseApp(tk.Tk):
         self._refresh_cfg_label()
 
     def on_sign_out(self) -> None:
-        ok, msg = untrust_device(self.config_data)
-        self.append_log(msg)
-        self._refresh_lock_label()
+        def work() -> None:
+            try:
+                _ok, msg = untrust_device(self.config_data)
+            except Exception as exc:
+                msg = f"Sign out failed: {exc}"
+
+            def done() -> None:
+                self.append_log(msg)
+                self._refresh_lock_label()
+
+            self.after(0, done)
+
+        threading.Thread(target=work, daemon=True).start()
         messagebox.showinfo("Signed out", msg)
 
     def _sync_access_key(self) -> None:
@@ -315,7 +386,10 @@ class FilttrSuperviseApp(tk.Tk):
         self._results = []
 
         def work() -> None:
-            users, msg = search_users(self.config_data, q)
+            try:
+                users, msg = search_users(self.config_data, q)
+            except Exception as exc:
+                users, msg = [], f"Search failed: {exc}"
 
             def done() -> None:
                 self._results = users
@@ -336,7 +410,10 @@ class FilttrSuperviseApp(tk.Tk):
         uid = self.var_userid.get().strip()
 
         def work() -> None:
-            user, msg = lookup_user_id(self.config_data, uid)
+            try:
+                user, msg = lookup_user_id(self.config_data, uid)
+            except Exception as exc:
+                user, msg = None, f"Lookup failed: {exc}"
 
             def done() -> None:
                 self.lbl_search_status.configure(text=msg)
@@ -375,11 +452,8 @@ class FilttrSuperviseApp(tk.Tk):
         if self._busy:
             return
 
-        def work() -> None:
-            info = get_device_info()
-            self.after(0, lambda: self._apply_device(info))
-
-        threading.Thread(target=work, daemon=True).start()
+        self.lbl_device.configure(text="Reading device…")
+        self._watcher.refresh_now()
 
     def _apply_device(self, info: DeviceInfo) -> None:
         self._device = info
@@ -474,6 +548,7 @@ class FilttrSuperviseApp(tk.Tk):
         self._sync_access_key()
         selected = None if remove else self._selected
         self._set_busy(True)
+        self._watcher.pause()
         self.append_log("—" * 40)
         self.append_log("Starting removal…" if remove else "Starting sparse supervise…")
         if not remove:
@@ -498,6 +573,7 @@ class FilttrSuperviseApp(tk.Tk):
 
             def done() -> None:
                 self._set_busy(False)
+                self._watcher.resume()
                 if result.ok:
                     extra = ""
                     if result.enrollment_url:

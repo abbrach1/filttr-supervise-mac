@@ -67,6 +67,7 @@ RESTORE_TIMEOUT = 180
 REBOOT_TIMEOUT = 20
 CLOSE_TIMEOUT = 5
 SESSION_ACTIVE_RETRIES = 3
+CONNECT_RETRIES = 4
 
 
 class DeviceStepError(Exception):
@@ -75,6 +76,18 @@ class DeviceStepError(Exception):
 
 def _is_session_active(exc: BaseException) -> bool:
     return "SessionActive" in type(exc).__name__ or "SessionActive" in str(exc)
+
+
+def _is_transient_usbmux(exc: BaseException) -> bool:
+    text = type(exc).__name__ + " " + str(exc)
+    return any(
+        k in text
+        for k in (
+            "DeviceNotFound", "ConnectionFailedToUsbmuxd", "ConnectionRefused",
+            "ConnectionReset", "ConnectionAborted", "ConnectionTerminated", "SSLEOF",
+            "BadDev", "MuxException",
+        )
+    ) or isinstance(exc, (ConnectionError, ssl.SSLEOFError))
 
 
 def _is_pair_pending(exc: BaseException) -> bool:
@@ -109,7 +122,8 @@ async def _connect_and_pair(
     from pymobiledevice3.lockdown import create_using_usbmux
 
     lockdown = None
-    for attempt in range(1, SESSION_ACTIVE_RETRIES + 1):
+    session_hits = 0
+    for attempt in range(1, CONNECT_RETRIES + 1):
         result.emit(f"Connecting to iPhone (lockdown, attempt {attempt})…", cb)
         try:
             lockdown = await asyncio.wait_for(
@@ -118,24 +132,32 @@ async def _connect_and_pair(
             )
             break
         except asyncio.TimeoutError:
+            if attempt < CONNECT_RETRIES:
+                result.emit(f"Connect timed out after {CONNECT_TIMEOUT}s; retrying…", cb)
+                continue
             raise DeviceStepError(
                 f"Connecting to the iPhone timed out after {CONNECT_TIMEOUT}s. "
                 "Unplug/replug the cable and retry."
             )
         except Exception as exc:
-            if _is_session_active(exc) and attempt < SESSION_ACTIVE_RETRIES:
-                result.emit(
-                    "Device reports SessionActive — another app holds a session. "
-                    "Close iTunes / the Apple Devices app; retrying in 3s…",
-                    cb,
-                )
-                await asyncio.sleep(3)
-                continue
             if _is_session_active(exc):
+                session_hits += 1
+                if session_hits < SESSION_ACTIVE_RETRIES and attempt < CONNECT_RETRIES:
+                    result.emit(
+                        "Device reports SessionActive — another app holds a session. "
+                        "Close iTunes / the Apple Devices app; retrying in 3s…",
+                        cb,
+                    )
+                    await asyncio.sleep(3)
+                    continue
                 raise DeviceStepError(
                     "SessionActive: another program (iTunes / Apple Devices) is "
                     "talking to the iPhone. Close it, unplug/replug, and retry."
                 )
+            if _is_transient_usbmux(exc) and attempt < CONNECT_RETRIES:
+                result.emit(f"USB connection dropped ({exc}); reconnecting in 3s…", cb)
+                await asyncio.sleep(3)
+                continue
             raise DeviceStepError(f"Lockdown connection failed: {exc}")
 
     if getattr(lockdown, "paired", False):
