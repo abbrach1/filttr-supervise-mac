@@ -16,7 +16,7 @@ from filttr_supervise.auth import (
     verify_email_code,
 )
 from filttr_supervise.config import AppConfig, load_config
-from filttr_supervise.device import DeviceInfo, get_device_info
+from filttr_supervise.device import DeviceInfo
 from filttr_supervise.supervise import supervise_device
 from filttr_supervise.watcher import DeviceWatcher
 from filttr_supervise.users import PortalUser, UnauthorizedError, lookup_user_id, search_users
@@ -322,11 +322,11 @@ class FilttrSuperviseApp(tk.Tk):
             def done() -> None:
                 self.append_log(msg)
                 self._refresh_lock_label()
+                messagebox.showinfo("Signed out", msg)
 
             self.after(0, done)
 
         threading.Thread(target=work, daemon=True).start()
-        messagebox.showinfo("Signed out", msg)
 
     def _sync_access_key(self) -> None:
         self.config_data.access_key = self.var_access_key.get().strip()
