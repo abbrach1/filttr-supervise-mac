@@ -61,7 +61,7 @@ def save_device_record(email: str, device: str, path: Optional[Path] = None) -> 
     p = path or device_store_path()
     p.parent.mkdir(parents=True, exist_ok=True)
     rec = {"email": email.strip().lower(), "device": device.strip()}
-    p.write_text(json.dumps(rec, indent=2) + "\n", encoding="utf-8")
+    p.write_text(json.dumps(rec, indent=2, default=str) + "\n", encoding="utf-8")
     try:
         os.chmod(p, 0o600)
     except OSError:
@@ -98,7 +98,7 @@ def _post_2fa(
     timeout: float = 20.0,
 ) -> tuple[dict[str, Any], int]:
     url = f"{config.api_base.rstrip('/')}/api/admin-2fa"
-    data = json.dumps(body).encode("utf-8")
+    data = json.dumps(body, default=str).encode("utf-8")
     req = urllib.request.Request(
         url,
         data=data,

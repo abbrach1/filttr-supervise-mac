@@ -152,7 +152,17 @@ def test_supervise_flow_never_calls_erase(tmp_path: Path) -> None:
     async def fake_create(**kwargs):
         return lockdown
 
+    presence = iter([False, True])
+
+    async def fake_present(udid):
+        return next(presence, True)
+
+    async def fake_supervised(udid):
+        return True
+
     with (
+        patch("filttr_supervise.supervise._device_present", new=fake_present),
+        patch("filttr_supervise.supervise._read_supervised", new=fake_supervised),
         patch("filttr_supervise.supervise.get_device_info", return_value=info),
         patch("pymobiledevice3.lockdown.create_using_usbmux", new=fake_create),
         patch(
@@ -183,3 +193,35 @@ def test_supervise_flow_never_calls_erase(tmp_path: Path) -> None:
     assert kwargs.get("skip_apps") is True
     assert erase_calls == []
     assert result.method == "backup_restore"
+    assert result.supervised_after is True and result.rebooted is True
+    assert "restarted supervised" in result.message
+
+
+def test_disconnect_without_reboot_is_not_success() -> None:
+    """Field bug: link dropped, phone never restarted -> must NOT report success."""
+    import asyncio
+    from filttr_supervise import supervise as sv
+
+    async def present(udid):
+        return True
+
+    async def not_sup(udid):
+        return False
+
+    restarts = []
+
+    async def fake_reboot(lockdown, result, cb):
+        restarts.append(1)
+
+    res = sv.SuperviseResult(ok=False)
+    with (
+        patch.object(sv, "_device_present", new=present),
+        patch.object(sv, "_read_supervised", new=not_sup),
+        patch.object(sv, "_reboot", new=fake_reboot),
+        patch.object(sv, "SELF_REBOOT_GRACE", 0.1),
+    ):
+        rebooted, supervised = asyncio.run(
+            sv._finish_and_verify(MagicMock(), "U", sv.RESTORE_DISCONNECTED, True, res, None)
+        )
+    assert restarts == [1]  # explicit soft restart attempted, like Tech Lockdown
+    assert rebooted is False and supervised is False

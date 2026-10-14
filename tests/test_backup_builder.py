@@ -48,3 +48,33 @@ def test_dot_source_writes_into_root(tmp_path: Path) -> None:
     device_dir = build_supervision_backup(tmp_path, cfg, source_identifier=".")
     assert device_dir == tmp_path
     assert (tmp_path / "Manifest.mbdb").is_file()
+
+
+def test_manifest_db_matches_tech_lockdown_layout(tmp_path: Path) -> None:
+    import sqlite3
+
+    cert = load_supervisor_cert_der(ROOT / "assets" / "filttr-supervisor.der")
+    cfg = build_cloud_configuration(cert, configuration_url="https://example/enroll")
+    info = {"BuildVersion": "24A1", "ProductType": "iPhone14,5",
+            "SerialNumber": "SN1", "UniqueDeviceID": "UDID1"}
+    d = build_supervision_backup(tmp_path, cfg, source_identifier=".", lockdown_info=info)
+    fid = file_id_for(CLOUD_CONFIG_DOMAIN, CLOUD_CONFIG_RELATIVE_PATH)
+    assert fid == "1e6c0783f9b33d00b152067a0661c8fc8841073f"
+    assert (d / fid[:2] / fid).is_file()
+    con = sqlite3.connect(d / "Manifest.db")
+    rows = {r[2]: r for r in con.execute("select * from Files")}
+    assert set(rows) == {"", "Library", "Library/ConfigurationProfiles", CLOUD_CONFIG_RELATIVE_PATH}
+    assert rows[CLOUD_CONFIG_RELATIVE_PATH][3] == 1 and rows["Library"][3] == 2
+    mb = plistlib.loads(rows[CLOUD_CONFIG_RELATIVE_PATH][4])
+    obj = mb["$objects"][1]
+    assert mb["$objects"][3]["$classname"] == "MBFile"
+    assert (obj["Mode"], obj["UserID"], obj["GroupID"], obj["ProtectionClass"]) == (33188, 501, -2, 4)
+    assert obj["Size"] == len((d / fid).read_bytes())
+    m = plistlib.loads((d / "Manifest.plist").read_bytes())
+    assert m["Version"] == "10.0" and m["SystemDomainsVersion"] == "24.0"
+    assert m["WasPasscodeSet"] is True and m["IsEncrypted"] is False
+    assert m["Lockdown"]["UniqueDeviceID"] == "UDID1"
+    assert m["BackupKeyBag"].startswith(b"VERS")
+    st = plistlib.loads((d / "Status.plist").read_bytes())
+    assert st["Version"] == "3.2" and st["BackupState"] == "new" and st["IsFullBackup"] is False
+    assert plistlib.loads((d / "Info.plist").read_bytes()) == {"Applications": {}}

@@ -37,24 +37,31 @@ logger = logging.getLogger(__name__)
 
 ProgressCb = Callable[[str], None]
 
-# Documented safe Mobilebackup2Service.restore kwargs for a sparse inject:
-#   system=True   — required so SysSharedContainerDomain files in OUR package apply;
-#                   the package contains only CloudConfigurationDetails.plist, not a
-#                   full system image / IPSW.
-#   settings=True — maps to RestorePreserveSettings=True (keep user settings).
-#   remove=False  — do NOT delete device items missing from the backup.
-#   copy=False    — no need to clone the backup folder on disk.
-#   reboot=False  — we reboot explicitly via DiagnosticsService.restart (not erase).
-#   skip_apps=True — do not reinstall apps from Info.plist.
+# Restore options — identical to Tech Lockdown's supervise.exe Restore request
+# (strings at 0x10709c0: RestoreSystemFiles, RestoreDontCopyBackup,
+# RestorePreserveSettings, RemoveItemsNotRestored, RestoreShouldReboot):
+#   system=True   -> RestoreSystemFiles=True (SysSharedContainerDomain files apply)
+#   copy=False    -> RestoreDontCopyBackup=True
+#   settings=True -> RestorePreserveSettings=True (keep user settings)
+#   remove=False  -> RemoveItemsNotRestored=False (never delete anything)
+#   reboot=True   -> RestoreShouldReboot=True ("Restore completed - device will reboot");
+#                    if the phone does not restart by itself we send a soft
+#                    diagnostics_relay Restart, as Tech Lockdown does.
+#   skip_apps=True -> do not write /iTunesRestore/RestoreApplications.plist.
 SAFE_RESTORE_KWARGS = {
     "system": True,
     "settings": True,
     "remove": False,
     "copy": False,
-    "reboot": False,
+    "reboot": True,
     "skip_apps": True,
     "source": ".",
 }
+
+# Restore outcomes
+RESTORE_COMPLETED = "completed"      # device reported ErrorCode 0
+RESTORE_DISCONNECTED = "disconnected"  # link dropped before a result
+RESTORE_FAILED = "failed"
 
 # Step timeouts (seconds). Every device await is bounded — the tool must never hang.
 CONNECT_TIMEOUT = 20
@@ -65,6 +72,8 @@ VALIDATE_TIMEOUT = 15
 RESTORE_START_TIMEOUT = 30
 RESTORE_TIMEOUT = 180
 REBOOT_TIMEOUT = 20
+SELF_REBOOT_GRACE = 25      # wait for the phone to restart by itself
+REAPPEAR_TIMEOUT = 240      # wait for the phone to come back + be unlocked
 CLOSE_TIMEOUT = 5
 SESSION_ACTIVE_RETRIES = 3
 CONNECT_RETRIES = 4
@@ -230,6 +239,10 @@ class SuperviseResult:
     backup_path: Optional[str] = None
     enrollment_url: str = ""
     api_post_message: str = ""
+    restore_outcome: str = ""
+    rebooted: bool = False
+    supervised_after: Optional[bool] = None
+    verified: bool = True
     log: list[str] = field(default_factory=list)
 
     def emit(self, line: str, cb: Optional[ProgressCb] = None) -> None:
@@ -292,8 +305,8 @@ async def _restore_via_backup(
     result: SuperviseResult,
     cb: Optional[ProgressCb],
     *,
-    reboot: bool = True,
-) -> bool:
+    lockdown_info: Optional[dict[str, str]] = None,
+) -> str:
     from pymobiledevice3.exceptions import ConnectionTerminatedError, PyMobileDevice3Exception
     from pymobiledevice3.services.mobilebackup2 import Mobilebackup2Service
 
@@ -304,7 +317,9 @@ async def _restore_via_backup(
     )
     with tempfile.TemporaryDirectory(prefix="filttr-supervise-") as tmp:
         backup_root = Path(tmp)
-        device_dir = build_supervision_backup(backup_root, cloud, source_identifier=".")
+        device_dir = build_supervision_backup(
+            backup_root, cloud, source_identifier=".", lockdown_info=lockdown_info
+        )
         result.backup_path = str(device_dir)
         result.emit(f"Backup package ready under {device_dir}", cb)
         result.emit(
@@ -332,7 +347,7 @@ async def _restore_via_backup(
                 result.emit(
                     f"Starting MobileBackup2 timed out after {RESTORE_START_TIMEOUT}s.", cb
                 )
-                return False
+                return RESTORE_FAILED
             try:
                 wrap_forbid_erase(mb, "erase_device")
                 result.emit("If the phone asks for its passcode, enter it now.", cb)
@@ -349,27 +364,26 @@ async def _restore_via_backup(
                     )
                 except Exception:
                     pass
-            result.emit("MobileBackup2 restore finished.", cb)
+            result.emit("Restore completed successfully (ErrorCode: 0).", cb)
             result.method = "backup_restore"
-            if reboot:
-                await _reboot(lockdown, result, cb)
-            return True
+            return RESTORE_COMPLETED
         except asyncio.TimeoutError:
             result.emit(
                 f"MobileBackup2 restore timed out after {RESTORE_TIMEOUT}s. If the phone "
                 "asked for a passcode, enter it and retry; close iTunes / Apple Devices.",
                 cb,
             )
-            return False
+            return RESTORE_FAILED
         except WipeForbiddenError:
             raise
         except (ConnectionTerminatedError, ssl.SSLEOFError, ConnectionAbortedError, ConnectionResetError) as exc:
             result.emit(
-                f"Device disconnected during restore (likely reboot): {exc}",
+                f"Device link closed before the restore reported a result ({exc!r}). "
+                "Checking whether the phone restarts / is supervised…",
                 cb,
             )
             result.method = "backup_restore"
-            return True
+            return RESTORE_DISCONNECTED
         except PyMobileDevice3Exception as exc:
             msg = str(exc)
             if "Find My" in msg:
@@ -380,10 +394,10 @@ async def _restore_via_backup(
                 )
             else:
                 result.emit(f"MobileBackup2 restore failed: {exc}", cb)
-            return False
+            return RESTORE_FAILED
         except Exception as exc:
-            result.emit(f"MobileBackup2 restore failed: {exc}", cb)
-            return False
+            result.emit(f"MobileBackup2 restore failed: {exc!r}", cb)
+            return RESTORE_FAILED
 
 
 async def _reboot(lockdown: Any, result: SuperviseResult, cb: Optional[ProgressCb]) -> None:
@@ -405,6 +419,99 @@ async def _reboot(lockdown: Any, result: SuperviseResult, cb: Optional[ProgressC
             f"Reboot request note: {exc} (device may still reboot on its own)",
             cb,
         )
+
+
+async def _device_present(udid: str) -> bool:
+    try:
+        from pymobiledevice3.usbmux import list_devices
+
+        devs = await asyncio.wait_for(list_devices(), timeout=5)
+        return any(getattr(d, "serial", None) == udid for d in devs)
+    except Exception:
+        return False
+
+
+async def _wait_for_disappear(udid: str, seconds: float) -> bool:
+    loop = asyncio.get_running_loop()
+    end = loop.time() + seconds
+    while loop.time() < end:
+        if not await _device_present(udid):
+            return True
+        await asyncio.sleep(2)
+    return False
+
+
+async def _read_supervised(udid: str) -> Optional[bool]:
+    """Read-only: MCInstall GetCloudConfiguration -> IsSupervised (None if unreadable)."""
+    from pymobiledevice3.lockdown import create_using_usbmux
+    from pymobiledevice3.services.mobile_config import MobileConfigService
+
+    lockdown = None
+    try:
+        lockdown = await asyncio.wait_for(
+            create_using_usbmux(serial=udid, autopair=False), timeout=CONNECT_TIMEOUT
+        )
+        if not getattr(lockdown, "paired", False):
+            return None
+
+        async def _q() -> Any:
+            async with MobileConfigService(lockdown) as mc:
+                return await mc.get_cloud_configuration()
+
+        cloud = await asyncio.wait_for(_q(), timeout=15)
+        if isinstance(cloud, dict):
+            return bool(cloud.get("IsSupervised"))
+        return False
+    except Exception as exc:
+        logger.info("supervision check not possible yet: %r", exc)
+        return None
+    finally:
+        await _safe_close(lockdown)
+
+
+async def _finish_and_verify(
+    lockdown: Any,
+    udid: str,
+    outcome: str,
+    expect_supervised: bool,
+    result: "SuperviseResult",
+    cb: Optional[ProgressCb],
+) -> tuple[bool, Optional[bool]]:
+    """After the restore: ensure a soft reboot happened, then verify IsSupervised.
+
+    Returns (rebooted, supervised). Never erases.
+    """
+    result.emit(
+        f"Waiting up to {SELF_REBOOT_GRACE}s for the phone to restart by itself…", cb
+    )
+    rebooted = await _wait_for_disappear(udid, SELF_REBOOT_GRACE)
+    if not rebooted:
+        result.emit("Phone took the restore but did not restart by itself.", cb)
+        await _reboot(lockdown, result, cb)
+        rebooted = await _wait_for_disappear(udid, SELF_REBOOT_GRACE)
+    if not rebooted:
+        result.emit(
+            "The phone did not restart. Supervision only takes effect after a restart.",
+            cb,
+        )
+    else:
+        result.emit("Phone is restarting… unlock it once it is back on.", cb)
+
+    loop = asyncio.get_running_loop()
+    end = loop.time() + (REAPPEAR_TIMEOUT if rebooted else 20)
+    supervised: Optional[bool] = None
+    note_shown = False
+    while loop.time() < end:
+        if await _device_present(udid):
+            supervised = await _read_supervised(udid)
+            if supervised is not None and (supervised == expect_supervised or not rebooted):
+                break
+            if not note_shown:
+                result.emit("Phone is back — unlock it so supervision can be checked…", cb)
+                note_shown = True
+        await asyncio.sleep(4)
+    result.emit(f"Verification (MCInstall GetCloudConfiguration): IsSupervised={supervised}", cb)
+    return rebooted, supervised
 
 
 async def _show_enrollment_url(
@@ -523,53 +630,92 @@ async def _run_supervise_async(
         result.message = str(exc)
         result.emit(result.message, progress)
         return result
-    success = False
+    lockdown_info = {
+        "BuildVersion": info.build_version,
+        "ProductType": info.product_type,
+        "SerialNumber": info.serial,
+        "UniqueDeviceID": info.udid,
+    }
+    outcome = RESTORE_FAILED
+    supervised: Optional[bool] = None
+    rebooted = False
     try:
-        success = await _restore_via_backup(
-            lockdown, cloud, result, progress, reboot=True
+        outcome = await _restore_via_backup(
+            lockdown, cloud, result, progress, lockdown_info=lockdown_info
         )
-        if success and not remove:
-            await _show_enrollment_url(config, result, progress)
-            user_dict = None
-            if selected_user is not None:
-                user_dict = (
-                    selected_user.to_dict()
-                    if hasattr(selected_user, "to_dict")
-                    else dict(selected_user)
-                )
-            elif config.access_key:
-                user_dict = {
-                    "access_key": config.access_key,
-                    "name": "",
-                    "email": "",
-                    "user_id": "",
-                }
-            ok_post, post_msg = post_supervision_complete(
-                config, info.to_dict(), user=user_dict
+        if outcome != RESTORE_FAILED:
+            rebooted, supervised = await _finish_and_verify(
+                lockdown, info.udid, outcome, not remove, result, progress
             )
-            result.api_post_message = post_msg
-            result.emit(post_msg, progress)
-            if config.access_key and info.udid:
-                _ok_a, msg_a = post_assign_device(
-                    config,
-                    udid=info.udid,
-                    access_key=config.access_key,
-                    user=user_dict,
-                )
-                result.emit(msg_a, progress)
     finally:
         await _safe_close(lockdown)
 
-    result.ok = success
-    result.message = (
-        ("Supervision applied (sparse backup restore; phone not erased)"
-         if not remove
-         else "Removal payload applied (sparse backup restore; phone not erased)")
-        if success
-        else "Supervision flow failed — see log"
-    )
+    result.restore_outcome = outcome
+    result.rebooted = rebooted
+    result.supervised_after = supervised
+    target = not remove
+    if outcome == RESTORE_FAILED:
+        result.ok = False
+        result.message = "Supervision flow failed — see log"
+    elif supervised is target:
+        result.ok = True
+        result.message = (
+            "Phone restarted supervised ✓ (IsSupervised=true; phone not erased)"
+            if not remove else "Supervision removed ✓ (phone not erased)"
+        )
+    elif supervised is None and rebooted and outcome == RESTORE_COMPLETED:
+        result.ok = True
+        result.verified = False
+        result.message = (
+            "Phone is restarting supervised. Restore completed (ErrorCode 0); "
+            "unlock the phone and press Refresh to confirm IsSupervised."
+        )
+    else:
+        result.ok = False
+        result.message = (
+            "Supervision did NOT apply"
+            f" (restore: {outcome}, restarted: {rebooted}, IsSupervised: {supervised})."
+            " No data was erased — see log."
+        )
+    result.emit(result.message, progress)
+
+    if result.ok and not remove:
+        _report_completion(config, info, selected_user, result, progress)
     result.emit(result.message, progress)
     return result
+
+
+def _report_completion(config, info, selected_user, result, progress) -> None:
+    """Best-effort post-restore reporting. Never fatal."""
+    try:
+        enrollment = config.enrollment_url_for() or result.enrollment_url
+        result.enrollment_url = enrollment
+        if enrollment:
+            result.emit(
+                "If MDM did not auto-enroll, open this URL on the iPhone (Safari):\n"
+                + enrollment,
+                progress,
+            )
+        user_dict = None
+        if selected_user is not None:
+            user_dict = (
+                selected_user.to_dict() if hasattr(selected_user, "to_dict")
+                else dict(selected_user)
+            )
+        elif config.access_key:
+            user_dict = {"access_key": config.access_key, "name": "", "email": "", "user_id": ""}
+        device = info.to_dict()
+        device["supervised"] = result.supervised_after
+        _ok, post_msg = post_supervision_complete(config, device, user=user_dict)
+        result.api_post_message = post_msg
+        result.emit(post_msg, progress)
+        if config.access_key and info.udid:
+            _ok_a, msg_a = post_assign_device(
+                config, udid=info.udid, access_key=config.access_key, user=user_dict
+            )
+            result.emit(msg_a, progress)
+    except Exception as exc:
+        result.emit(f"Completion report skipped (non-fatal): {exc!r}", progress)
 
 
 def supervise_device(

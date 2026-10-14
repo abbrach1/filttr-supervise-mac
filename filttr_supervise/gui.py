@@ -466,6 +466,23 @@ class FilttrSuperviseApp(tk.Tk):
         self._refresh_cfg_label()
         self._update_supervise_enabled()
 
+    def _show_success(self, headline: str, detail: str) -> None:
+        """Green success dialog (not an error popup)."""
+        win = tk.Toplevel(self)
+        win.title("Filttr Supervise")
+        win.configure(bg=theme.OK_BG)
+        win.transient(self)
+        tk.Label(win, text="\u2714  " + headline, bg=theme.OK_BG, fg=theme.OK,
+                 font=("Segoe UI", 14, "bold")).pack(padx=24, pady=(20, 8), anchor=tk.W)
+        tk.Label(win, text=detail, bg=theme.OK_BG, fg="#1d3b2a", justify=tk.LEFT,
+                 wraplength=460).pack(padx=24, pady=(0, 12), anchor=tk.W)
+        ttk.Button(win, text="OK", command=win.destroy).pack(pady=(0, 16))
+        try:
+            self.badge_device.set("ok", headline)
+        except Exception:
+            pass
+        win.grab_set()
+
     def append_log(self, line: str) -> None:
         self.log.configure(state=tk.NORMAL)
         self.log.insert(tk.END, line + "\n")
@@ -694,8 +711,10 @@ class FilttrSuperviseApp(tk.Tk):
                     extra = ""
                     if result.enrollment_url:
                         extra = f"\n\nEnrollment URL:\n{result.enrollment_url}"
-                    messagebox.showinfo(
-                        "Filttr Supervise", (result.message or "Done") + extra
+                    self._show_success(
+                        "Phone is restarting supervised"
+                        if not remove else "Phone is restarting unsupervised",
+                        (result.message or "Done") + extra,
                     )
                 else:
                     messagebox.showerror(

@@ -14,6 +14,38 @@ from filttr_supervise.config import AppConfig
 logger = logging.getLogger(__name__)
 
 
+def json_safe(value: Any) -> Any:
+    """Recursively convert to JSON-serializable data.
+
+    bytes -> base64 str (e.g. SupervisorHostCertificates DER), datetime -> ISO,
+    sets/tuples -> lists, unknown objects -> str. Never raises.
+    """
+    import base64
+    import datetime as _dt
+
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        return base64.b64encode(bytes(value)).decode("ascii")
+    if isinstance(value, (_dt.datetime, _dt.date)):
+        return value.isoformat()
+    if isinstance(value, dict):
+        return {str(k): json_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return [json_safe(v) for v in value]
+    return str(value)
+
+
+def safe_json_bytes(payload: Any) -> bytes:
+    return json.dumps(json_safe(payload)).encode("utf-8")
+
+
+def device_payload(device_info: dict[str, Any]) -> dict[str, Any]:
+    """Device dict for the server: drop the raw cloud configuration (holds DER bytes)."""
+    out = {k: v for k, v in (device_info or {}).items() if k != "cloud_configuration"}
+    return json_safe(out)
+
+
 def _auth_headers(config: AppConfig) -> dict[str, str]:
     headers = {
         "Content-Type": "application/json",
@@ -35,10 +67,14 @@ def post_supervision_complete(
     timeout: float = 15.0,
 ) -> tuple[bool, str]:
     """POST device + user to ``api_base + complete_path``. Non-fatal on errors."""
-    url = config.complete_url()
+    try:
+        url = config.complete_url()
+    except Exception as exc:
+        return False, f"Completion report skipped (non-fatal): {exc}"
+    device_info = device_info or {}
     payload: dict[str, Any] = {
         "organization_name": config.organization_name,
-        "device": device_info,
+        "device": device_payload(device_info),
         "access_key": config.access_key,
         "udid": device_info.get("udid") or "",
     }
@@ -46,7 +82,7 @@ def post_supervision_complete(
         payload["user"] = user
         payload["userId"] = user.get("user_id") or user.get("userId") or ""
         payload["accessKey"] = user.get("access_key") or user.get("accessKey") or config.access_key
-    body = json.dumps(payload).encode("utf-8")
+    body = safe_json_bytes(payload)
     req = urllib.request.Request(url, data=body, headers=_auth_headers(config), method="POST")
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
@@ -82,7 +118,7 @@ def post_assign_device(
         "accessKey": access_key,
         "user": user or {},
     }
-    body = json.dumps(payload).encode("utf-8")
+    body = safe_json_bytes(payload)
     req = urllib.request.Request(url, data=body, headers=_auth_headers(config), method="POST")
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
