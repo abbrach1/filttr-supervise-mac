@@ -7,6 +7,10 @@ block_cipher = None
 datas = [
     ('assets/filttr-supervisor.der', 'assets'),
     ('assets/filttr-supervisor.crt', 'assets'),
+    ('assets/filttr.ico', 'assets'),
+    ('assets/filttr-icon-64.png', 'assets'),
+    ('assets/filttr-mark-40.png', 'assets'),
+    ('assets/filttr-wordmark-30.png', 'assets'),
     ('config.json', '.'),
 ]
 
@@ -24,6 +28,7 @@ hiddenimports = collect_submodules('pymobiledevice3') + [
     'filttr_supervise.auth',
     'filttr_supervise.safety',
     'filttr_supervise.watcher',
+    'filttr_supervise.theme',
     'filttr_supervise.__main__',
     'asyncio',
     'cryptography',
@@ -72,5 +77,6 @@ exe = EXE(
     argv_emulation=False,
     target_arch=None,
     codesign_identity=None,
+    icon='assets/filttr.ico',
     entitlements_file=None,
 )

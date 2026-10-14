@@ -6,6 +6,8 @@ import tkinter as tk
 from tkinter import messagebox, scrolledtext, ttk
 from typing import Optional
 
+from filttr_supervise import __version__
+from filttr_supervise import theme
 from filttr_supervise.auth import (
     DEFAULT_ADMIN_EMAIL,
     check_trusted_device,
@@ -21,6 +23,8 @@ from filttr_supervise.supervise import supervise_device
 from filttr_supervise.watcher import DeviceWatcher
 from filttr_supervise.users import PortalUser, UnauthorizedError, lookup_user_id, search_users
 
+NO_SELECTION = "(none — search, look up, or paste access key)"
+
 
 class UnlockDialog(tk.Toplevel):
     """Modal unlock: admin code OR email code (+ trust this PC)."""
@@ -29,7 +33,8 @@ class UnlockDialog(tk.Toplevel):
         super().__init__(master)
         self.config_data = config
         self.result_ok = False
-        self.title("Unlock Filttr Supervise")
+        self.title("Sign in — Filttr Supervise")
+        self.configure(bg=theme.PAPER_CARD, padx=12, pady=12)
         self.transient(master)
         self.grab_set()
         self.resizable(False, False)
@@ -38,10 +43,10 @@ class UnlockDialog(tk.Toplevel):
         ttk.Label(
             self,
             text="Unlock to search portal users (session token ~8 hours).",
-            wraplength=420,
+            wraplength=420, style="Card.TLabel",
         ).grid(row=0, column=0, columnspan=3, sticky="w", **pad)
 
-        ttk.Label(self, text="Admin email:").grid(row=1, column=0, sticky="e", **pad)
+        ttk.Label(self, text="Admin email:", style="Card.TLabel").grid(row=1, column=0, sticky="e", **pad)
         self.var_email = tk.StringVar(value=DEFAULT_ADMIN_EMAIL)
         ttk.Entry(self, textvariable=self.var_email, width=36).grid(
             row=1, column=1, columnspan=2, sticky="we", **pad
@@ -59,7 +64,7 @@ class UnlockDialog(tk.Toplevel):
             command=self._toggle,
         ).grid(row=3, column=0, columnspan=3, sticky="w", **pad)
 
-        ttk.Label(self, text="Code:").grid(row=4, column=0, sticky="e", **pad)
+        ttk.Label(self, text="Code:", style="Card.TLabel").grid(row=4, column=0, sticky="e", **pad)
         self.var_code = tk.StringVar()
         ttk.Entry(self, textvariable=self.var_code, width=24, show="*").grid(
             row=4, column=1, sticky="w", **pad
@@ -73,12 +78,13 @@ class UnlockDialog(tk.Toplevel):
         )
         self.chk_trust.grid(row=5, column=0, columnspan=3, sticky="w", **pad)
 
-        self.lbl = ttk.Label(self, text="", wraplength=420)
+        self.lbl = ttk.Label(self, text="", wraplength=420, style="CardMuted.TLabel")
         self.lbl.grid(row=6, column=0, columnspan=3, sticky="w", **pad)
 
-        btns = ttk.Frame(self)
+        btns = ttk.Frame(self, style="Card.TFrame")
         btns.grid(row=7, column=0, columnspan=3, **pad)
-        ttk.Button(btns, text="Unlock", command=self._unlock).pack(side=tk.LEFT, padx=4)
+        ttk.Button(btns, text="Unlock", style="Primary.TButton",
+                   command=self._unlock).pack(side=tk.LEFT, padx=4)
         ttk.Button(btns, text="Cancel", command=self._cancel).pack(side=tk.LEFT, padx=4)
 
         self._toggle()
@@ -164,8 +170,10 @@ class FilttrSuperviseApp(tk.Tk):
         super().__init__()
         self.config_data = config or load_config()
         self.title("Filttr Supervise")
-        self.geometry("800x740")
-        self.minsize(700, 620)
+        self.fonts = theme.apply_theme(self)
+        theme.set_window_icon(self)
+        self.geometry("1040x800")
+        self.minsize(900, 700)
         self._busy = False
         self._device: Optional[DeviceInfo] = None
         self._selected: Optional[PortalUser] = None
@@ -192,91 +200,190 @@ class FilttrSuperviseApp(tk.Tk):
             pass
 
     def _build(self) -> None:
-        pad = {"padx": 8, "pady": 4}
-        frm = ttk.Frame(self)
-        frm.pack(fill=tk.BOTH, expand=True)
+        f = self.fonts
+        # ---- Header bar (ink) with logo, app name and sign-in pill ----
+        header = tk.Frame(self, bg=theme.INK)
+        header.pack(fill=tk.X)
+        tk.Frame(self, bg=theme.SIGNAL, height=3).pack(fill=tk.X)
+        hin = tk.Frame(header, bg=theme.INK)
+        hin.pack(fill=tk.X, padx=20, pady=12)
+        self._img_mark = theme.load_image("filttr-mark-40.png")
+        self._img_word = theme.load_image("filttr-wordmark-30.png")
+        if self._img_mark:
+            tk.Label(hin, image=self._img_mark, bg=theme.INK, bd=0).pack(side=tk.LEFT)
+        if self._img_word:
+            tk.Label(hin, image=self._img_word, bg=theme.INK, bd=0).pack(side=tk.LEFT, padx=(10, 0))
+        titles = tk.Frame(hin, bg=theme.INK)
+        titles.pack(side=tk.LEFT, padx=(14, 0))
+        ttk.Label(titles, text="Supervise", style="Header.TLabel").pack(anchor=tk.W)
+        ttk.Label(
+            titles, text=f"v{__version__} · sparse restore · never erases the phone",
+            style="HeaderMuted.TLabel",
+        ).pack(anchor=tk.W)
+        ttk.Button(hin, text="Sign out", style="Header.TButton",
+                   command=self.on_sign_out).pack(side=tk.RIGHT, padx=(6, 0))
+        ttk.Button(hin, text="Sign in…", style="Header.TButton",
+                   command=self.open_unlock).pack(side=tk.RIGHT, padx=(6, 0))
+        self.lbl_lock = theme.Pill(hin, f, "info", "Not signed in (optional)")
+        self.lbl_lock.pack(side=tk.RIGHT, padx=(0, 10))
 
-        top = ttk.Frame(frm)
-        top.pack(fill=tk.X, **pad)
-        self.lbl_lock = ttk.Label(top, text="Not signed in (optional)", font=("", 10, "bold"))
-        self.lbl_lock.pack(side=tk.LEFT)
-        ttk.Button(top, text="Sign in (optional)…", command=self.open_unlock).pack(side=tk.LEFT, padx=6)
-        ttk.Button(top, text="Sign out / untrust this PC", command=self.on_sign_out).pack(
-            side=tk.LEFT, padx=4
+        body = ttk.Frame(self)
+        body.pack(fill=tk.BOTH, expand=True, padx=20, pady=16)
+        body.columnconfigure(0, weight=5, uniform="col")
+        body.columnconfigure(1, weight=6, uniform="col")
+        body.rowconfigure(0, weight=1)
+
+        left = ttk.Frame(body)
+        left.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
+        right = ttk.Frame(body)
+        right.grid(row=0, column=1, sticky="nsew", padx=(8, 0))
+
+        # ---- Device card ----
+        dev = theme.Card(left, "Device", f)
+        dev.pack(fill=tk.X)
+        self.btn_refresh = ttk.Button(dev.head_right, text="↻  Refresh", command=self.refresh_device)
+        self.btn_refresh.pack(side=tk.RIGHT)
+        self.badge_device = theme.Pill(dev.body, f, "warn", "Looking for USB iPhone…", big=True)
+        self.badge_device.pack(anchor=tk.W, pady=(2, 10))
+        self.lbl_device_name = ttk.Label(dev.body, text="", style="CardBig.TLabel")
+        self.lbl_device_name.pack(anchor=tk.W)
+        self.lbl_device = ttk.Label(dev.body, text="Connect an iPhone via USB and unlock it.",
+                                    style="CardMuted.TLabel", justify=tk.LEFT, wraplength=360)
+        self.lbl_device.pack(anchor=tk.W, pady=(2, 0))
+
+        # ---- Prechecks card ----
+        pre = theme.Card(left, "Prechecks", f)
+        pre.pack(fill=tk.BOTH, expand=True, pady=(14, 0))
+        self.pre_rows = tk.Frame(pre.body, bg=theme.PAPER_CARD)
+        self.pre_rows.pack(fill=tk.X)
+        self.lbl_pre = ttk.Label(
+            pre.body,
+            text="Prep: Find My OFF, phone unlocked, tap Trust this PC.\n"
+            "This tool never factory-resets the phone.",
+            style="CardMuted.TLabel", justify=tk.LEFT, wraplength=360,
         )
+        self.lbl_pre.pack(anchor=tk.W, pady=(10, 0))
+        self._render_prechecks([])
 
-        info = ttk.LabelFrame(frm, text="Device")
-        info.pack(fill=tk.X, **pad)
-        self.lbl_device = ttk.Label(info, text="Looking for USB iPhone…", justify=tk.LEFT)
-        self.lbl_device.pack(anchor=tk.W, **pad)
-
-        pre = ttk.LabelFrame(frm, text="Prechecks")
-        pre.pack(fill=tk.X, **pad)
-        self.lbl_pre = ttk.Label(pre, text="", justify=tk.LEFT)
-        self.lbl_pre.pack(anchor=tk.W, **pad)
-
-        userf = ttk.LabelFrame(frm, text="Portal user (applied to phone)")
-        userf.pack(fill=tk.BOTH, **pad)
-
-        row = ttk.Frame(userf)
-        row.pack(fill=tk.X, **pad)
-        ttk.Label(row, text="Search name:").pack(side=tk.LEFT)
+        # ---- User picker card ----
+        userf = theme.Card(right, "Portal user", f, subtitle="Applied to the phone's enrollment URL")
+        userf.pack(fill=tk.BOTH, expand=True)
+        ub = userf.body
+        row = tk.Frame(ub, bg=theme.PAPER_CARD)
+        row.pack(fill=tk.X, pady=(4, 6))
         self.var_query = tk.StringVar()
-        self.entry_query = ttk.Entry(row, textvariable=self.var_query, width=28)
-        self.entry_query.pack(side=tk.LEFT, padx=6, fill=tk.X, expand=True)
+        self.entry_query = ttk.Entry(row, textvariable=self.var_query)
+        self.entry_query.pack(side=tk.LEFT, fill=tk.X, expand=True)
         self.entry_query.bind("<Return>", lambda _e: self.on_search())
         self.btn_search = ttk.Button(row, text="Search", command=self.on_search)
-        self.btn_search.pack(side=tk.LEFT, padx=4)
+        self.btn_search.pack(side=tk.LEFT, padx=(8, 0))
 
-        rowu = ttk.Frame(userf)
-        rowu.pack(fill=tk.X, **pad)
-        ttk.Label(rowu, text="User ID:").pack(side=tk.LEFT)
+        rowu = tk.Frame(ub, bg=theme.PAPER_CARD)
+        rowu.pack(fill=tk.X, pady=(0, 8))
+        ttk.Label(rowu, text="or User ID", style="CardMuted.TLabel").pack(side=tk.LEFT)
         self.var_userid = tk.StringVar()
-        ttk.Entry(rowu, textvariable=self.var_userid, width=16).pack(side=tk.LEFT, padx=6)
-        ttk.Button(rowu, text="Look up by User ID", command=self.on_lookup).pack(
-            side=tk.LEFT, padx=4
-        )
+        ttk.Entry(rowu, textvariable=self.var_userid, width=14).pack(side=tk.LEFT, padx=8)
+        ttk.Button(rowu, text="Look up", command=self.on_lookup).pack(side=tk.LEFT)
 
-        self.lst_users = tk.Listbox(userf, height=5, exportselection=False)
-        self.lst_users.pack(fill=tk.X, padx=8, pady=4)
+        lstf = tk.Frame(ub, bg=theme.PAPER_HAIR, bd=0)
+        lstf.pack(fill=tk.BOTH, expand=True)
+        self.lst_users = tk.Listbox(
+            lstf, height=6, exportselection=False, activestyle="none", bd=0,
+            highlightthickness=0, relief=tk.FLAT, bg="#FFFFFF", fg=theme.INK,
+            selectbackground=theme.SIGNAL, selectforeground=theme.INK,
+            font=f.body, disabledforeground=theme.STONE,
+        )
+        sb = ttk.Scrollbar(lstf, orient=tk.VERTICAL, command=self.lst_users.yview)
+        self.lst_users.configure(yscrollcommand=sb.set)
+        self.lst_users.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=1, pady=1)
+        sb.pack(side=tk.RIGHT, fill=tk.Y, pady=1, padx=(0, 1))
         self.lst_users.bind("<<ListboxSelect>>", self.on_pick_user)
 
-        self.lbl_selected = ttk.Label(
-            userf,
-            text="Selected: (none — search, look up, or paste access key)",
-            justify=tk.LEFT,
-            font=("", 11, "bold"),
-            wraplength=740,
-        )
-        self.lbl_selected.pack(anchor=tk.W, **pad)
-        self.lbl_search_status = ttk.Label(userf, text="", justify=tk.LEFT, wraplength=740)
-        self.lbl_search_status.pack(anchor=tk.W, padx=8)
+        self.lbl_search_status = ttk.Label(ub, text="Type a name and press Enter.",
+                                           style="CardMuted.TLabel", justify=tk.LEFT,
+                                           wraplength=420)
+        self.lbl_search_status.pack(anchor=tk.W, pady=(4, 8))
 
-        row2 = ttk.Frame(userf)
-        row2.pack(fill=tk.X, **pad)
-        ttk.Label(row2, text="Access key fallback:").pack(side=tk.LEFT)
+        sel = tk.Frame(ub, bg=theme.INK)
+        sel.pack(fill=tk.X)
+        tk.Label(sel, text="SELECTED USER", bg=theme.INK, fg=theme.SIGNAL,
+                 font=f.small).pack(anchor=tk.W, padx=14, pady=(10, 0))
+        self.lbl_selected = tk.Label(
+            sel, text=NO_SELECTION, bg=theme.INK, fg=theme.PAPER, font=f.body_b,
+            justify=tk.LEFT, anchor=tk.W, wraplength=420,
+        )
+        self.lbl_selected.pack(fill=tk.X, padx=14, pady=(2, 10))
+
+        row2 = tk.Frame(ub, bg=theme.PAPER_CARD)
+        row2.pack(fill=tk.X, pady=(10, 0))
+        ttk.Label(row2, text="Access key", style="CardMuted.TLabel").pack(side=tk.LEFT)
         self.var_access_key = tk.StringVar(value=self.config_data.access_key or "")
-        self.entry_access_key = ttk.Entry(row2, textvariable=self.var_access_key, width=40)
-        self.entry_access_key.pack(side=tk.LEFT, padx=6, fill=tk.X, expand=True)
+        self.entry_access_key = ttk.Entry(row2, textvariable=self.var_access_key)
+        self.entry_access_key.pack(side=tk.LEFT, padx=(8, 0), fill=tk.X, expand=True)
         self.var_access_key.trace_add("write", lambda *_: self._on_access_key_typed())
 
-        self.lbl_cfg = ttk.Label(userf, text="", justify=tk.LEFT, wraplength=740)
-        self.lbl_cfg.pack(anchor=tk.W, **pad)
+        self.lbl_cfg = ttk.Label(ub, text="", style="CardMuted.TLabel", justify=tk.LEFT,
+                                 wraplength=420)
+        self.lbl_cfg.pack(anchor=tk.W, pady=(6, 0))
         self._refresh_cfg_label()
 
-        btns = ttk.Frame(frm)
-        btns.pack(fill=tk.X, **pad)
-        self.btn_refresh = ttk.Button(btns, text="Refresh device", command=self.refresh_device)
-        self.btn_refresh.pack(side=tk.LEFT, padx=4)
-        self.btn_supervise = ttk.Button(btns, text="Supervise", command=self.on_supervise)
-        self.btn_supervise.pack(side=tk.LEFT, padx=4)
-        self.btn_remove = ttk.Button(btns, text="Remove supervision", command=self.on_remove)
-        self.btn_remove.pack(side=tk.LEFT, padx=4)
+        # ---- Action bar ----
+        btns = ttk.Frame(self)
+        btns.pack(fill=tk.X, padx=20, pady=(0, 10))
+        self.btn_supervise = ttk.Button(btns, text="Supervise iPhone", style="Primary.TButton",
+                                        command=self.on_supervise)
+        self.btn_supervise.pack(side=tk.LEFT)
+        self.btn_remove = ttk.Button(btns, text="Remove supervision", style="Secondary.TButton",
+                                     command=self.on_remove)
+        self.btn_remove.pack(side=tk.LEFT, padx=10)
+        ttk.Label(btns, text="Sparse MobileBackup2 restore of CloudConfigurationDetails only — "
+                  "user data is not erased.", style="Muted.TLabel",
+                  wraplength=360, justify=tk.LEFT).pack(side=tk.LEFT, padx=10)
 
-        logf = ttk.LabelFrame(frm, text="Log")
-        logf.pack(fill=tk.BOTH, expand=True, **pad)
-        self.log = scrolledtext.ScrolledText(logf, height=11, state=tk.DISABLED, wrap=tk.WORD)
-        self.log.pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
+        # ---- Collapsible log ----
+        logbar = ttk.Frame(self)
+        logbar.pack(fill=tk.X, padx=20)
+        self.btn_log = ttk.Button(logbar, text="▾  Log", style="Link.TButton",
+                                  command=self._toggle_log)
+        self.btn_log.pack(side=tk.LEFT)
+        self.logf = tk.Frame(self, bg=theme.INK)
+        self.logf.pack(fill=tk.X, padx=20, pady=(2, 16))
+        self.log = scrolledtext.ScrolledText(
+            self.logf, height=6, state=tk.DISABLED, wrap=tk.WORD, bd=0, relief=tk.FLAT,
+            bg=theme.INK, fg=theme.PAPER, insertbackground=theme.SIGNAL, font=f.mono,
+            highlightthickness=0, padx=10, pady=8,
+        )
+        self.log.pack(fill=tk.BOTH, expand=True)
+        self._log_open = True
+
+    def _toggle_log(self) -> None:
+        self._log_open = not self._log_open
+        if self._log_open:
+            self.logf.pack(fill=tk.X, padx=20, pady=(2, 16))
+            self.btn_log.configure(text="▾  Log")
+        else:
+            self.logf.pack_forget()
+            self.btn_log.configure(text="▸  Log (hidden)")
+
+    def _render_prechecks(self, checks: list[tuple[str, str, str]]) -> None:
+        """checks: (label, value text, kind in ok/warn/bad/info)."""
+        for w in self.pre_rows.winfo_children():
+            w.destroy()
+        if not checks:
+            tk.Label(self.pre_rows, text="Waiting for a device…", bg=theme.PAPER_CARD,
+                     fg=theme.MUTED, font=self.fonts.body).pack(anchor=tk.W)
+            return
+        icons = {"ok": "✔", "bad": "✘", "warn": "!", "info": "•"}
+        for i, (label, val, kind) in enumerate(checks):
+            fg, bg = theme.STATUS_COLORS[kind]
+            r = tk.Frame(self.pre_rows, bg=theme.PAPER_CARD)
+            r.pack(fill=tk.X, pady=3)
+            tk.Label(r, text=icons[kind], width=2, bg=bg, fg=fg,
+                     font=self.fonts.icon).pack(side=tk.LEFT)
+            tk.Label(r, text=label, bg=theme.PAPER_CARD, fg=theme.INK,
+                     font=self.fonts.body).pack(side=tk.LEFT, padx=10)
+            tk.Label(r, text=val, bg=theme.PAPER_CARD, fg=fg,
+                     font=self.fonts.body_b).pack(side=tk.RIGHT)
 
     def _startup_check_trust(self) -> None:
         """Silently reuse a trusted-PC session if one exists; never prompt."""
@@ -300,9 +407,9 @@ class FilttrSuperviseApp(tk.Tk):
 
     def _refresh_lock_label(self) -> None:
         if effective_tool_token(self.config_data):
-            self.lbl_lock.configure(text="Unlocked")
+            self.lbl_lock.set("ok", "Signed in")
         else:
-            self.lbl_lock.configure(text="Not signed in (optional)")
+            self.lbl_lock.set("info", "Not signed in (optional)")
 
     def open_unlock(self) -> None:
         dlg = UnlockDialog(self, self.config_data)
@@ -337,7 +444,7 @@ class FilttrSuperviseApp(tk.Tk):
         tok = "yes" if effective_tool_token(self.config_data) else "no"
         self.lbl_cfg.configure(
             text=(
-                f"Signed in: {tok} (optional)  |  Does NOT erase the phone (sparse MobileBackup2 only)\n"
+                f"Signed in: {tok} (optional)\n"
                 f"ConfigurationURL: {preview or '(select a user or paste access key)'}"
             )
         )
@@ -351,13 +458,11 @@ class FilttrSuperviseApp(tk.Tk):
         key = self.var_access_key.get().strip()
         if self._selected and self._selected.access_key != key:
             self._selected = None
-            self.lbl_selected.configure(text=f"Selected: (manual key) k={key[:12]}…")
+            self.lbl_selected.configure(text=f"Manual access key  k={key[:12]}…")
         elif not self._selected and key:
-            self.lbl_selected.configure(text=f"Selected: (manual key) k={key}")
+            self.lbl_selected.configure(text=f"Manual access key  k={key}")
         elif not key:
-            self.lbl_selected.configure(
-                text="Selected: (none — search, look up, or paste access key)"
-            )
+            self.lbl_selected.configure(text=NO_SELECTION)
         self._refresh_cfg_label()
         self._update_supervise_enabled()
 
@@ -431,13 +536,15 @@ class FilttrSuperviseApp(tk.Tk):
         self._selected = user
         self.config_data.access_key = user.access_key
         self.var_access_key.set(user.access_key)
-        parts = [user.name or "(no name)"]
-        if user.user_id:
-            parts.append(f"userId={user.user_id}")
+        meta = []
         if user.email:
-            parts.append(user.email)
-        parts.append(f"k={user.access_key}")
-        self.lbl_selected.configure(text="Selected: " + " | ".join(parts))
+            meta.append(user.email)
+        if user.user_id:
+            meta.append(f"userId {user.user_id}")
+        meta.append(f"k={user.access_key}")
+        self.lbl_selected.configure(
+            text=(user.name or "(no name)") + "\n" + "  ·  ".join(meta)
+        )
         self._refresh_cfg_label()
         self._update_supervise_enabled()
         self.append_log(f"Selected user {user.label()} → accessKey set")
@@ -452,45 +559,54 @@ class FilttrSuperviseApp(tk.Tk):
         if self._busy:
             return
 
-        self.lbl_device.configure(text="Reading device…")
+        self.badge_device.set("warn", "Reading device…")
         self._watcher.refresh_now()
 
     def _apply_device(self, info: DeviceInfo) -> None:
         self._device = info
         if not info.connected:
-            self.lbl_device.configure(text=info.error or "No USB iPhone connected")
-            self.lbl_pre.configure(
-                text="Connect an iPhone with Apple Devices / iTunes drivers installed."
+            self.badge_device.set("bad", "No iPhone connected")
+            self.lbl_device_name.configure(text="")
+            self.lbl_device.configure(
+                text=(info.error or "No USB iPhone connected")
+                + "\nConnect an iPhone with Apple Devices / iTunes drivers installed."
             )
+            self._render_prechecks([])
             return
+        if info.paired:
+            self.badge_device.set("ok", "Connected & trusted")
+        else:
+            self.badge_device.set("warn", "Connected — tap Trust on the iPhone")
+        self.lbl_device_name.configure(text=info.name or "(unnamed)")
         self.lbl_device.configure(
             text=(
-                f"{info.name or '(unnamed)'}\n"
-                f"UDID: {info.udid}\n"
-                f"Serial: {info.serial}\n"
-                f"Model: {info.product_type}  iOS: {info.product_version} ({info.build_version})"
+                f"{info.product_type}  ·  iOS {info.product_version} ({info.build_version})\n"
+                f"Serial {info.serial}\n"
+                f"UDID {info.udid}"
             )
         )
+
+        def yn(val, good_when):
+            if val is None:
+                return "unknown", "info"
+            return ("Yes" if val else "No"), ("ok" if val == good_when else "bad")
+
+        act = info.activation_state or "unknown"
+        sup = info.supervised
         checks = [
-            ("Paired / Trusted", info.paired),
-            ("Activation", info.activation_state or "unknown"),
-            ("Supervised (current)", info.supervised),
-            ("Find My", info.find_my_enabled),
-            ("Encrypted backup", info.will_encrypt_backup),
+            ("Paired / Trusted", *yn(info.paired, True)),
+            ("Activation", act, "ok" if act.lower() == "activated" else "warn"),
+            ("Supervised (current)", "unknown" if sup is None else ("Yes" if sup else "No"), "info"),
+            ("Find My", *yn(info.find_my_enabled, False)),
+            ("Encrypted backup", "unknown" if info.will_encrypt_backup is None
+             else ("Yes" if info.will_encrypt_backup else "No"),
+             "warn" if info.will_encrypt_backup else "info"),
         ]
-        lines = []
-        for label, val in checks:
-            if val is True:
-                mark = "YES"
-            elif val is False:
-                mark = "no"
-            else:
-                mark = str(val)
-            lines.append(f"• {label}: {mark}")
-        lines.append(
-            "Prep: Find My OFF, unlocked, Trust this PC. "
+        self._render_prechecks(checks)
+        lines = [
+            "Prep: Find My OFF, phone unlocked, tap Trust this PC.\n"
             "This tool never factory-resets the phone."
-        )
+        ]
         if info.notes:
             lines.extend(f"• {n}" for n in info.notes)
         self.lbl_pre.configure(text="\n".join(lines))
@@ -521,7 +637,7 @@ class FilttrSuperviseApp(tk.Tk):
             messagebox.showerror("User / access key required", err)
             return
         url = self.config_data.configuration_url_for()
-        who = self.lbl_selected.cget("text")
+        who = "Selected: " + self.lbl_selected.cget("text")
         if not messagebox.askyesno(
             "Supervise (no erase)",
             f"{who}\n\n"
@@ -593,5 +709,6 @@ class FilttrSuperviseApp(tk.Tk):
 
 
 def run_gui(config: Optional[AppConfig] = None) -> None:
+    theme.enable_dpi_awareness()
     app = FilttrSuperviseApp(config=config)
     app.mainloop()
