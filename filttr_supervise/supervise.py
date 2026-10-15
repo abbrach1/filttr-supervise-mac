@@ -49,9 +49,9 @@ ProgressCb = Callable[[str], None]
 #                    diagnostics_relay Restart, as Tech Lockdown does.
 #   skip_apps=True -> do not write /iTunesRestore/RestoreApplications.plist.
 SAFE_RESTORE_KWARGS = {
-    "system": True,
+    "system": False,
     "settings": True,
-    "remove": False,
+    "remove": True,
     "copy": False,
     "reboot": True,
     "skip_apps": True,
