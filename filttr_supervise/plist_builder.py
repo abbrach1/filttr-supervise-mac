@@ -67,7 +67,42 @@ CLOUD_CONFIG_RELATIVE_PATH = (
 CLOUD_CONFIG_SET_ASIDE_RELATIVE_PATH = (
     "Library/ConfigurationProfiles/CloudConfigurationSetAsideDetails.plist"
 )
-MC_META_RELATIVE_PATH = "PublicInfo/MCMeta.plist"
+MC_META_RELATIVE_PATH = "Library/ConfigurationProfiles/PublicInfo/MCMeta.plist"
+
+HOME_DOMAIN = "HomeDomain"
+MANAGED_PREFS_DOMAIN = "ManagedPreferencesDomain"
+PURPLEBUDDY_RELATIVE_PATH = "Library/Preferences/com.apple.purplebuddy.plist"
+SETUP_ASSISTANT_PRIVACY_RELATIVE_PATH = (
+    "Library/Preferences/com.apple.setupassistant.privacypane.plist"
+)
+MANAGED_PURPLEBUDDY_RELATIVE_PATH = "mobile/com.apple.purplebuddy.plist"
+
+
+def build_purplebuddy_plist(extended: bool = False) -> bytes:
+    """Plist injected into HomeDomain (extended=True) and ManagedPreferencesDomain.
+
+    MCForceShowCloudConfigurationUI=True triggers iOS to re-evaluate and apply
+    CloudConfigurationDetails.plist on next reboot. Key names verified from
+    Tech Lockdown's actual backup (captured via ETW trace + backup restore).
+    """
+    data: dict = {
+        "daemonizeNeedsToRun": True,
+        "ForceNoBuddy": False,
+        "MCForceShowCloudConfigurationUI": True,
+        "SetupDone": False,
+        "SetupFinishedAllSteps": True,
+        "UserChoseLanguage": True,
+    }
+    if extended:
+        data["GuessedCountry"] = ["US"]
+        data["Language"] = "en-US"
+        data["Locale"] = "en_US"
+        data["SetupState"] = "SetupNotDone"
+    return plistlib.dumps(data, fmt=plistlib.FMT_BINARY)
+
+
+def build_setup_assistant_privacy_plist() -> bytes:
+    return plistlib.dumps({"MigrationVersion": 1}, fmt=plistlib.FMT_BINARY)
 
 
 def load_supervisor_cert_der(cert_path: str | Path) -> bytes:
@@ -127,15 +162,14 @@ def build_cloud_configuration(
     config: dict[str, Any] = {
         "AllowPairing": bool(allow_pairing),
         "AwaitDeviceConfigured": False,
-        "CloudConfigurationUIComplete": True,
+        "CloudConfigurationUIComplete": False,
         "ConfigurationSource": 2,
         "ConfigurationURL": configuration_url or "",
-        "ConfigurationWasApplied": True,
+        "ConfigurationWasApplied": False,
         "IsMDMUnremovable": bool(is_mdm_unremovable),
         "IsMandatory": bool(is_mandatory),
         "IsSupervised": bool(is_supervised),
         "OrganizationName": organization_name,
-        "PostSetupProfileWasInstalled": True,
         "SkipSetup": list(SKIP_SETUP),
         "SupervisorHostCertificates": (
             [supervisor_cert_der] if supervisor_cert_der else []
@@ -149,9 +183,12 @@ def build_cloud_configuration_details_plist(config: dict[str, Any]) -> bytes:
     return plistlib.dumps(config, fmt=plistlib.FMT_BINARY)
 
 
-def build_mc_meta_plist() -> bytes:
-    """Minimal MCMeta.plist that iOS expects alongside a set-aside cloud config."""
-    return plistlib.dumps({"MCMetaProtocolVersion": 1}, fmt=plistlib.FMT_BINARY)
+def build_mc_meta_plist(build_version: str = "") -> bytes:
+    """MCMeta.plist alongside the set-aside cloud config.
+
+    Content verified from Tech Lockdown's actual backup: just LastMDMMigratedBuild.
+    """
+    return plistlib.dumps({"LastMDMMigratedBuild": build_version or ""}, fmt=plistlib.FMT_BINARY)
 
 
 def build_removal_configuration(

@@ -15,8 +15,9 @@ Layout mirrors Tech Lockdown's supervise.exe sparse-restore template exactly
 * Content at ``<id[:2]>/<id>`` (Manifest.db layout) and ``<id>`` (mbdb layout),
   id = SHA-1(domain + "-" + relative_path).
 
-Four entries only: the configurationprofiles domain root, Library,
-Library/ConfigurationProfiles and CloudConfigurationDetails.plist. No erase.
+Entries: the configurationprofiles domain files (CloudConfigurationDetails +
+SetAside + MCMeta), plus HomeDomain and ManagedPreferencesDomain purplebuddy
+plists that trigger iOS to re-evaluate the cloud config on next reboot.
 """
 from __future__ import annotations
 
@@ -36,9 +37,16 @@ from filttr_supervise.plist_builder import (
     CLOUD_CONFIG_DOMAIN,
     CLOUD_CONFIG_RELATIVE_PATH,
     CLOUD_CONFIG_SET_ASIDE_RELATIVE_PATH,
+    HOME_DOMAIN,
+    MANAGED_PREFS_DOMAIN,
+    MANAGED_PURPLEBUDDY_RELATIVE_PATH,
     MC_META_RELATIVE_PATH,
+    PURPLEBUDDY_RELATIVE_PATH,
+    SETUP_ASSISTANT_PRIVACY_RELATIVE_PATH,
     build_cloud_configuration_details_plist,
     build_mc_meta_plist,
+    build_purplebuddy_plist,
+    build_setup_assistant_privacy_plist,
 )
 
 # Generic unencrypted-backup keybag, identical to the one in Tech Lockdown's
@@ -159,33 +167,43 @@ def mbfile_archive(entry: BackupEntry, ts: Optional[int] = None) -> bytes:
     return plistlib.dumps(archive, fmt=plistlib.FMT_BINARY)
 
 
-def build_cloud_config_entries(config: dict[str, Any]) -> list[BackupEntry]:
+def build_cloud_config_entries(
+    config: dict[str, Any],
+    lockdown_info: Optional[dict] = None,
+) -> list[BackupEntry]:
     """Entries matching Tech Lockdown's Manifest.db rows (owner/mode/protection).
 
     Includes CloudConfigurationSetAsideDetails.plist and PublicInfo/MCMeta.plist
-    alongside the main CloudConfigurationDetails.plist — the full file set that
-    makes the supervised state persist on iOS 27+ after reboot.
+    alongside the main CloudConfigurationDetails.plist, plus HomeDomain and
+    ManagedPreferencesDomain purplebuddy plists that set ForceShowCloudConfigurationUI=True
+    so iOS re-evaluates and applies the cloud config on next reboot.
     """
     plist_bytes = build_cloud_configuration_details_plist(config)
     d = CLOUD_CONFIG_DOMAIN
+    h = HOME_DOMAIN
+    m = MANAGED_PREFS_DOMAIN
+
+    bv = (lockdown_info or {}).get("BuildVersion", "")
+    pb_home = build_purplebuddy_plist(extended=True)
+    pb_managed = build_purplebuddy_plist(extended=False)
+    sp = build_setup_assistant_privacy_plist()
+
+    # Directory entries omitted — Tech Lockdown's backup contains only content
+    # files (6 SHA1 files). iOS creates parent directories automatically during
+    # a sparse restore.
     return [
-        BackupEntry(d, "", owner=0, group=0, mode=0o40755, protection_class=0, inode=266),
-        BackupEntry(d, "Library", owner=-2, group=-2, mode=0o40000, protection_class=0, inode=268),
-        BackupEntry(d, "Library/ConfigurationProfiles", owner=-2, group=-2, mode=0o40000,
-                    protection_class=4, inode=343),
-        BackupEntry(d, CLOUD_CONFIG_RELATIVE_PATH, contents=plist_bytes, owner=501, group=-2,
-                    mode=0o100644, protection_class=4, inode=51802),
-        # Set-aside: same payload, separate path. iOS reads this on boot to process
-        # the pending supervised cloud configuration; without it the main plist lands
-        # but the device reverts supervision on the next reboot (observed on iOS 27).
+        BackupEntry(d, CLOUD_CONFIG_RELATIVE_PATH, contents=plist_bytes,
+                    owner=501, group=-2, mode=0o100644, protection_class=4, inode=51802),
         BackupEntry(d, CLOUD_CONFIG_SET_ASIDE_RELATIVE_PATH, contents=plist_bytes,
                     owner=501, group=-2, mode=0o100644, protection_class=4, inode=51803),
-        # PublicInfo directory + MCMeta.plist (Tech Lockdown injects both alongside the
-        # cloud config; MCMeta carries the protocol version the restore expects).
-        BackupEntry(d, "PublicInfo", owner=-2, group=-2, mode=0o40000,
-                    protection_class=0, inode=344),
-        BackupEntry(d, MC_META_RELATIVE_PATH, contents=build_mc_meta_plist(),
+        BackupEntry(d, MC_META_RELATIVE_PATH, contents=build_mc_meta_plist(bv),
                     owner=501, group=-2, mode=0o100644, protection_class=4, inode=51804),
+        BackupEntry(h, PURPLEBUDDY_RELATIVE_PATH, contents=pb_home, owner=501, group=-2,
+                    mode=0o100644, protection_class=4, inode=5),
+        BackupEntry(h, SETUP_ASSISTANT_PRIVACY_RELATIVE_PATH, contents=sp, owner=501, group=-2,
+                    mode=0o100644, protection_class=4, inode=6),
+        BackupEntry(m, MANAGED_PURPLEBUDDY_RELATIVE_PATH, contents=pb_managed, owner=501,
+                    group=-2, mode=0o100644, protection_class=4, inode=9),
     ]
 
 
@@ -280,7 +298,7 @@ def build_supervision_backup(
     """Convenience: build a backup that only restores CloudConfigurationDetails."""
     return write_backup_package(
         output_dir,
-        build_cloud_config_entries(config),
+        build_cloud_config_entries(config, lockdown_info=lockdown_info),
         source_identifier=source_identifier,
         lockdown_info=lockdown_info,
     )
