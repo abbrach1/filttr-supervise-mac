@@ -11,6 +11,8 @@ from filttr_supervise.backup_builder import (
 from filttr_supervise.plist_builder import (
     CLOUD_CONFIG_DOMAIN,
     CLOUD_CONFIG_RELATIVE_PATH,
+    CLOUD_CONFIG_SET_ASIDE_RELATIVE_PATH,
+    MC_META_RELATIVE_PATH,
     build_cloud_configuration,
     load_supervisor_cert_der,
 )
@@ -63,7 +65,11 @@ def test_manifest_db_matches_tech_lockdown_layout(tmp_path: Path) -> None:
     assert (d / fid[:2] / fid).is_file()
     con = sqlite3.connect(d / "Manifest.db")
     rows = {r[2]: r for r in con.execute("select * from Files")}
-    assert set(rows) == {"", "Library", "Library/ConfigurationProfiles", CLOUD_CONFIG_RELATIVE_PATH}
+    assert set(rows) == {
+        "", "Library", "Library/ConfigurationProfiles",
+        CLOUD_CONFIG_RELATIVE_PATH, CLOUD_CONFIG_SET_ASIDE_RELATIVE_PATH,
+        "PublicInfo", MC_META_RELATIVE_PATH,
+    }
     assert rows[CLOUD_CONFIG_RELATIVE_PATH][3] == 1 and rows["Library"][3] == 2
     mb = plistlib.loads(rows[CLOUD_CONFIG_RELATIVE_PATH][4])
     obj = mb["$objects"][1]

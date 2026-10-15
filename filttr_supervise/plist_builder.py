@@ -64,6 +64,10 @@ CLOUD_CONFIG_DOMAIN = (
 CLOUD_CONFIG_RELATIVE_PATH = (
     "Library/ConfigurationProfiles/CloudConfigurationDetails.plist"
 )
+CLOUD_CONFIG_SET_ASIDE_RELATIVE_PATH = (
+    "Library/ConfigurationProfiles/CloudConfigurationSetAsideDetails.plist"
+)
+MC_META_RELATIVE_PATH = "PublicInfo/MCMeta.plist"
 
 
 def load_supervisor_cert_der(cert_path: str | Path) -> bytes:
@@ -143,6 +147,11 @@ def build_cloud_configuration(
 def build_cloud_configuration_details_plist(config: dict[str, Any]) -> bytes:
     """Serialize the cloud configuration as a binary plist (device format)."""
     return plistlib.dumps(config, fmt=plistlib.FMT_BINARY)
+
+
+def build_mc_meta_plist() -> bytes:
+    """Minimal MCMeta.plist that iOS expects alongside a set-aside cloud config."""
+    return plistlib.dumps({"MCMetaProtocolVersion": 1}, fmt=plistlib.FMT_BINARY)
 
 
 def build_removal_configuration(

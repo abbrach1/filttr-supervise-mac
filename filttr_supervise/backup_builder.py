@@ -35,7 +35,10 @@ from filttr_supervise import mbdb
 from filttr_supervise.plist_builder import (
     CLOUD_CONFIG_DOMAIN,
     CLOUD_CONFIG_RELATIVE_PATH,
+    CLOUD_CONFIG_SET_ASIDE_RELATIVE_PATH,
+    MC_META_RELATIVE_PATH,
     build_cloud_configuration_details_plist,
+    build_mc_meta_plist,
 )
 
 # Generic unencrypted-backup keybag, identical to the one in Tech Lockdown's
@@ -157,7 +160,12 @@ def mbfile_archive(entry: BackupEntry, ts: Optional[int] = None) -> bytes:
 
 
 def build_cloud_config_entries(config: dict[str, Any]) -> list[BackupEntry]:
-    """Entries matching Tech Lockdown's Manifest.db rows (owner/mode/protection)."""
+    """Entries matching Tech Lockdown's Manifest.db rows (owner/mode/protection).
+
+    Includes CloudConfigurationSetAsideDetails.plist and PublicInfo/MCMeta.plist
+    alongside the main CloudConfigurationDetails.plist — the full file set that
+    makes the supervised state persist on iOS 27+ after reboot.
+    """
     plist_bytes = build_cloud_configuration_details_plist(config)
     d = CLOUD_CONFIG_DOMAIN
     return [
@@ -167,6 +175,17 @@ def build_cloud_config_entries(config: dict[str, Any]) -> list[BackupEntry]:
                     protection_class=4, inode=343),
         BackupEntry(d, CLOUD_CONFIG_RELATIVE_PATH, contents=plist_bytes, owner=501, group=-2,
                     mode=0o100644, protection_class=4, inode=51802),
+        # Set-aside: same payload, separate path. iOS reads this on boot to process
+        # the pending supervised cloud configuration; without it the main plist lands
+        # but the device reverts supervision on the next reboot (observed on iOS 27).
+        BackupEntry(d, CLOUD_CONFIG_SET_ASIDE_RELATIVE_PATH, contents=plist_bytes,
+                    owner=501, group=-2, mode=0o100644, protection_class=4, inode=51803),
+        # PublicInfo directory + MCMeta.plist (Tech Lockdown injects both alongside the
+        # cloud config; MCMeta carries the protocol version the restore expects).
+        BackupEntry(d, "PublicInfo", owner=-2, group=-2, mode=0o40000,
+                    protection_class=0, inode=344),
+        BackupEntry(d, MC_META_RELATIVE_PATH, contents=build_mc_meta_plist(),
+                    owner=501, group=-2, mode=0o100644, protection_class=4, inode=51804),
     ]
 
 
