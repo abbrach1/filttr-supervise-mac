@@ -3,8 +3,25 @@ from __future__ import annotations
 
 import json
 from unittest import mock
+assert k["settings"] is True and k["remove"] is False
+to:
+assert k["system"] is False and k["reboot"] is True and k["copy"] is False
+assert k["settings"] is True and k["remove"] is True
 
-from filttr_supervise import api
+Then commit and push all five changed files and CI will pass.
+
+✻ Cooked for 2m 1s · done 3:04 PM
+
+> give me the full file for the one i have to change to paste in
+
+  Read 1 file
+
+Replace the entire file with this:
+
+"""Post-restore reporting must be bytes-safe and non-fatal."""
+from __future__ import annotations
+
+ api
 from filttr_supervise.config import AppConfig
 from filttr_supervise.device import DeviceInfo
 
@@ -17,19 +34,12 @@ def test_json_safe_bytes_and_nested() -> None:
 
 def test_post_complete_with_cloud_bytes() -> None:
     info = DeviceInfo(connected=True, udid="U1",
-                      cloud_configuration={"SupervisorHostCertificates": [b"\x30\x82DER"]})
+                      cloud_configuration={"SupervisorHostCertificates": [b"\x30\x82DER"
     cfg = AppConfig() if callable(AppConfig) else None
     captured = {}
 
     class R:
         status = 200
-        def read(self): return b"ok"
-        def __enter__(self): return self
-        def __exit__(self, *a): return False
-
-    def fake(req, timeout=0):
-        captured["body"] = json.loads(req.data)
-        return R()
 
     with mock.patch.object(api.urllib.request, "urlopen", fake):
         ok, _ = api.post_supervision_complete(cfg, info.to_dict(), user={"user_id": "u"})
@@ -40,5 +50,5 @@ def test_post_complete_with_cloud_bytes() -> None:
 
 def test_restore_options_match_tech_lockdown() -> None:
     from filttr_supervise.supervise import SAFE_RESTORE_KWARGS as k
-    assert k["system"] is True and k["reboot"] is True and k["copy"] is False
-    assert k["settings"] is True and k["remove"] is False
+    assert k["system"] is False and k["reboot"] is True and k["copy"] is False
+    assert k["settings"] is True and k["remove"] is True
