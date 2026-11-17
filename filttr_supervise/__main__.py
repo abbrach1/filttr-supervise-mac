@@ -10,6 +10,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Filttr Supervise — USB iPhone supervision for Filttr MDM")
     parser.add_argument("--config", type=Path, help="Path to config.json")
     parser.add_argument("--gui", action="store_true", help="Launch tkinter GUI (default if no action)")
+    parser.add_argument("--user", action="store_true", help="Launch end-user setup GUI (setup-code only, no admin login)")
     parser.add_argument("--supervise", action="store_true", help="Run supervise flow on connected device")
     parser.add_argument("--remove", action="store_true", help="Run remove-supervision flow")
     parser.add_argument(
@@ -59,7 +60,13 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 0 if result.ok else 2
 
-    # Default: GUI
+    if args.user:
+        from filttr_supervise.user_gui import run_user_gui
+
+        run_user_gui(config)
+        return 0
+
+    # Default: admin GUI
     from filttr_supervise.gui import run_gui
 
     run_gui(config)

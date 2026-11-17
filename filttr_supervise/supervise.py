@@ -18,7 +18,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Optional
 
-from filttr_supervise.api import lookup_configuration_url, post_assign_device, post_supervision_complete
+from filttr_supervise.api import (
+    lookup_configuration_url,
+    post_assign_device,
+    post_supervision_complete,
+    post_unassign_device,
+)
 from filttr_supervise.backup_builder import build_supervision_backup
 from filttr_supervise.config import AppConfig, load_config
 from filttr_supervise.device import DeviceInfo, get_device_info
@@ -37,17 +42,21 @@ logger = logging.getLogger(__name__)
 
 ProgressCb = Callable[[str], None]
 
-# Restore options — identical to Tech Lockdown's supervise.exe Restore request
-# (strings at 0x10709c0: RestoreSystemFiles, RestoreDontCopyBackup,
-# RestorePreserveSettings, RemoveItemsNotRestored, RestoreShouldReboot):
-#   system=True   -> RestoreSystemFiles=True (SysSharedContainerDomain files apply)
+# Restore options — GROUND TRUTH from Tech Lockdown binary option bytes 00 01 01 01
+# {RestoreSystemFiles, RestoreDontCopyBackup, RestorePreserveSettings,
+# RemoveItemsNotRestored} = {false, true, true, true}:
+#   system=False  -> RestoreSystemFiles=False: our file is in a shared-container domain,
+#                    NOT a system-files domain. True triggers a device-wide system restore
+#                    that bypasses the sparse package and can sign iCloud out.
 #   copy=False    -> RestoreDontCopyBackup=True
 #   settings=True -> RestorePreserveSettings=True (keep user settings)
-#   remove=False  -> RemoveItemsNotRestored=False (never delete anything)
-#   reboot=True   -> RestoreShouldReboot=True ("Restore completed - device will reboot");
-#                    if the phone does not restart by itself we send a soft
-#                    diagnostics_relay Restart, as Tech Lockdown does.
+#   remove=True   -> RemoveItemsNotRestored=True: scoped to our one backup domain, this
+#                    is what makes the device actually apply the file instead of no-oping.
+#   reboot=True   -> RestoreShouldReboot=True; if the phone does not restart by itself
+#                    we send a soft diagnostics_relay Restart, as Tech Lockdown does.
 #   skip_apps=True -> do not write /iTunesRestore/RestoreApplications.plist.
+#   source omitted -> restore() uses lockdown.udid so SourceIdentifier == TargetIdentifier;
+#                     iOS treats it as a same-device restore and applies the config.
 SAFE_RESTORE_KWARGS = {
     "system": False,
     "settings": True,
@@ -55,25 +64,24 @@ SAFE_RESTORE_KWARGS = {
     "copy": False,
     "reboot": True,
     "skip_apps": True,
-    "source": ".",
 }
 
 # Restore outcomes
-RESTORE_COMPLETED = "completed"      # device reported ErrorCode 0
-RESTORE_DISCONNECTED = "disconnected"  # link dropped before a result
+RESTORE_COMPLETED = "completed"
+RESTORE_DISCONNECTED = "disconnected"
 RESTORE_FAILED = "failed"
 
-# Step timeouts (seconds). Every device await is bounded — the tool must never hang.
+# Step timeouts (seconds)
 CONNECT_TIMEOUT = 20
 DEVICE_INFO_TIMEOUT = 90
 PAIR_TOTAL_TIMEOUT = 60
 PAIR_ATTEMPT_TIMEOUT = 10
 VALIDATE_TIMEOUT = 15
 RESTORE_START_TIMEOUT = 30
-RESTORE_TIMEOUT = 180
-REBOOT_TIMEOUT = 20
-SELF_REBOOT_GRACE = 25      # wait for the phone to restart by itself
-REAPPEAR_TIMEOUT = 240      # wait for the phone to come back + be unlocked
+RESTORE_TIMEOUT = 300
+REBOOT_TIMEOUT = 30
+SELF_REBOOT_GRACE = 25
+REAPPEAR_TIMEOUT = 240
 CLOSE_TIMEOUT = 5
 SESSION_ACTIVE_RETRIES = 3
 CONNECT_RETRIES = 4
@@ -124,10 +132,6 @@ async def _safe_close(lockdown: Any) -> None:
 async def _connect_and_pair(
     udid: str, result: "SuperviseResult", cb: Optional[ProgressCb]
 ) -> Any:
-    """Open lockdown and ensure the host is paired, with bounded waits.
-
-    Raises DeviceStepError with a clear message on failure.
-    """
     from pymobiledevice3.lockdown import create_using_usbmux
 
     lockdown = None
@@ -285,7 +289,7 @@ def dry_run_build_backup(
     config = config or load_config()
     cert_path = config.resolve_cert_path()
     if remove:
-        cloud = build_removal_configuration(organization_name=config.organization_name)
+        cloud = build_removal_configuration()
     else:
         cert_der = load_supervisor_cert_der(cert_path)
         cloud = build_cloud_configuration(
@@ -310,15 +314,15 @@ async def _restore_via_backup(
     from pymobiledevice3.exceptions import ConnectionTerminatedError, PyMobileDevice3Exception
     from pymobiledevice3.services.mobilebackup2 import Mobilebackup2Service
 
-    # Runtime belt-and-suspenders: never allow erase_device on this service instance.
     result.emit(
         "Building minimal MobileBackup2 package (CloudConfigurationDetails only)…",
         cb,
     )
     with tempfile.TemporaryDirectory(prefix="filttr-supervise-") as tmp:
         backup_root = Path(tmp)
+        udid = (lockdown_info or {}).get("UniqueDeviceID", "") or "."
         device_dir = build_supervision_backup(
-            backup_root, cloud, source_identifier=".", lockdown_info=lockdown_info
+            backup_root, cloud, source_identifier=udid, lockdown_info=lockdown_info
         )
         result.backup_path = str(device_dir)
         result.emit(f"Backup package ready under {device_dir}", cb)
@@ -327,6 +331,7 @@ async def _restore_via_backup(
             f"(kwargs={SAFE_RESTORE_KWARGS}) — does NOT erase user data…",
             cb,
         )
+
         def _on_progress(pct: Any) -> None:
             try:
                 p = float(pct)
@@ -335,7 +340,7 @@ async def _restore_via_backup(
             bucket = int(p // 10) * 10
             if bucket > state["last"]:
                 state["last"] = bucket
-                result.emit(f"Restore progress: {p:.0f}%", cb)
+                result.emit(f"Restore progress: {bucket}%", cb)
 
         state = {"last": -1}
         try:
@@ -392,6 +397,12 @@ async def _restore_via_backup(
                     "(Settings → [Name] → Find My).",
                     cb,
                 )
+            elif "lock itunes" in msg.lower():
+                result.emit(
+                    "Restore blocked: iTunes sync lock is held by another process. "
+                    "Close Apple Devices / iTunes and retry.",
+                    cb,
+                )
             else:
                 result.emit(f"MobileBackup2 restore failed: {exc}", cb)
             return RESTORE_FAILED
@@ -401,14 +412,13 @@ async def _restore_via_backup(
 
 
 async def _reboot(lockdown: Any, result: SuperviseResult, cb: Optional[ProgressCb]) -> None:
-    """Soft restart only — never erase."""
     try:
         from pymobiledevice3.services.diagnostics import DiagnosticsService
 
         result.emit("Requesting device reboot (restart, not erase)…", cb)
+
         async def _do() -> None:
             async with DiagnosticsService(lockdown) as diag:
-                # Guard: diagnostics must not expose an erase we accidentally call
                 wrap_forbid_erase(diag, "erase_device")
                 await diag.restart()
 
@@ -442,7 +452,6 @@ async def _wait_for_disappear(udid: str, seconds: float) -> bool:
 
 
 async def _read_supervised(udid: str) -> Optional[bool]:
-    """Read-only: MCInstall GetCloudConfiguration -> IsSupervised (None if unreadable)."""
     from pymobiledevice3.lockdown import create_using_usbmux
     from pymobiledevice3.services.mobile_config import MobileConfigService
 
@@ -477,10 +486,6 @@ async def _finish_and_verify(
     result: "SuperviseResult",
     cb: Optional[ProgressCb],
 ) -> tuple[bool, Optional[bool]]:
-    """After the restore: ensure a soft reboot happened, then verify IsSupervised.
-
-    Returns (rebooted, supervised). Never erases.
-    """
     result.emit(
         f"Waiting up to {SELF_REBOOT_GRACE}s for the phone to restart by itself…", cb
     )
@@ -514,23 +519,6 @@ async def _finish_and_verify(
     return rebooted, supervised
 
 
-async def _show_enrollment_url(
-    config: AppConfig,
-    result: SuperviseResult,
-    cb: Optional[ProgressCb],
-) -> None:
-    enrollment = config.enrollment_url_for() or result.enrollment_url
-    result.enrollment_url = enrollment
-    if not enrollment:
-        result.emit("No enrollment_url — MDM profile step skipped.", cb)
-        return
-    result.emit(
-        f"After reboot, open this enrollment URL on the iPhone (Safari) if MDM "
-        f"did not auto-pull from ConfigurationURL:\n{enrollment}",
-        cb,
-    )
-
-
 async def _run_supervise_async(
     config: AppConfig,
     *,
@@ -552,43 +540,41 @@ async def _run_supervise_async(
         result.emit(f"Dry-run backup written to {path}", progress)
         return result
 
-    result.emit("Reading device info…", progress)
+    result.emit("📱 Reading your iPhone…", progress)
     try:
         info = await asyncio.wait_for(
             asyncio.to_thread(get_device_info, udid), timeout=DEVICE_INFO_TIMEOUT
         )
     except asyncio.TimeoutError:
         result.message = (
-            f"Reading device info timed out after {DEVICE_INFO_TIMEOUT}s — "
-            "unplug/replug, close iTunes / Apple Devices, and retry."
+            f"⏱ Couldn't read the phone after {DEVICE_INFO_TIMEOUT}s. "
+            "Try unplugging and plugging back in, then tap Set up again."
         )
         result.emit(result.message, progress)
         return result
     result.device = info
     if not info.connected or not info.udid:
-        result.message = info.error or "No device connected"
+        result.message = info.error or "No iPhone connected"
         result.emit(result.message, progress)
         return result
 
     blockers = validate_device_for_supervise(
         find_my_enabled=info.find_my_enabled,
         activation_state=info.activation_state,
-        # Pairing is performed explicitly below (with timeouts), so it is not a
-        # pre-blocker here.
         paired=True,
     )
     if blockers:
         result.message = blockers[0]
         for b in blockers:
-            result.emit(b, progress)
+            result.emit("⚠ " + b, progress)
         return result
 
     result.emit(
-        f"Device: {info.name}  iOS {info.product_version}  UDID {info.udid}",
+        f"✓ Found {info.name or 'iPhone'} · iOS {info.product_version}",
         progress,
     )
     if info.will_encrypt_backup:
-        result.emit("Note: device has encrypted backups enabled.", progress)
+        result.emit("ℹ Encrypted backup detected", progress)
 
     cfg_url = "" if remove else _resolve_config_url(config, info.udid, result, progress)
     result.enrollment_url = config.enrollment_url_for(info.udid) or cfg_url
@@ -601,12 +587,12 @@ async def _run_supervise_async(
         return result
 
     if remove:
-        cloud = build_removal_configuration(organization_name=config.organization_name)
-        result.emit("Built removal cloud-configuration (IsSupervised=false).", progress)
+        cloud = build_removal_configuration()
+        result.emit("⚙ Preparing to remove filter settings…", progress)
     else:
         cert_path = config.resolve_cert_path()
         if not cert_path.is_file():
-            result.message = f"Supervisor cert not found: {cert_path}"
+            result.message = f"⚠ Configuration not found on the server"
             result.emit(result.message, progress)
             return result
         cert_der = load_supervisor_cert_der(cert_path)
@@ -616,14 +602,10 @@ async def _run_supervise_async(
             configuration_url=cfg_url,
             is_mdm_unremovable=config.is_mdm_unremovable,
         )
-        result.emit(
-            f"Built cloud configuration for org={config.organization_name!r} "
-            f"url={cfg_url!r} mdm_unremovable={config.is_mdm_unremovable}",
-            progress,
-        )
+        result.emit("⚙ Setting up your filter…", progress)
 
     if not info.paired:
-        result.emit("Pairing state: not paired / not trusted yet.", progress)
+        result.emit("⚡ Please tap 'Trust' on your iPhone if prompted…", progress)
     try:
         lockdown = await _connect_and_pair(info.udid, result, progress)
     except DeviceStepError as exc:
@@ -656,37 +638,43 @@ async def _run_supervise_async(
     target = not remove
     if outcome == RESTORE_FAILED:
         result.ok = False
-        result.message = "Supervision flow failed — see log"
+        result.message = "❌ Setup failed. Check the log and try again."
     elif supervised is target:
         result.ok = True
         result.message = (
-            "Phone restarted supervised ✓ (IsSupervised=true; phone not erased)"
-            if not remove else "Supervision removed ✓ (phone not erased)"
+            "✅ Success! Your phone is ready."
+            if not remove else "✅ Filter settings removed."
         )
     elif supervised is None and rebooted and outcome == RESTORE_COMPLETED:
         result.ok = True
         result.verified = False
         result.message = (
-            "Phone is restarting supervised. Restore completed (ErrorCode 0); "
-            "unlock the phone and press Refresh to confirm IsSupervised."
+            "📲 Your phone is restarting. Unlock it once it's back on."
         )
     else:
         result.ok = False
-        result.message = (
-            "Supervision did NOT apply"
-            f" (restore: {outcome}, restarted: {rebooted}, IsSupervised: {supervised})."
-            " No data was erased — see log."
-        )
+        result.message = "❌ Setup didn't complete. Your data is safe — try again."
     result.emit(result.message, progress)
 
     if result.ok and not remove:
         _report_completion(config, info, selected_user, result, progress)
+    if result.ok and remove:
+        result.emit(
+            "Next: on the iPhone open Settings → General → VPN & Device Management, "
+            "tap the Filttr MDM profile and Remove Management. Confirm in "
+            "Settings → General → About that the 'supervised' notice is gone.",
+            progress,
+        )
+        try:
+            _ok_u, msg_u = post_unassign_device(config, udid=info.udid)
+            result.emit(msg_u, progress)
+        except Exception as exc:
+            result.emit(f"Server unlink skipped (non-fatal): {exc!r}", progress)
     result.emit(result.message, progress)
     return result
 
 
 def _report_completion(config, info, selected_user, result, progress) -> None:
-    """Best-effort post-restore reporting. Never fatal."""
     try:
         enrollment = config.enrollment_url_for() or result.enrollment_url
         result.enrollment_url = enrollment

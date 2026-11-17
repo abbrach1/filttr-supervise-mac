@@ -6,10 +6,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
-# USB / Configurator-style enroll uses cfg=1 (PayloadRemovalDisallowed).
-# k= is the portal access key (Firestore portals/{k}).
+# Non-removability comes from IsMDMUnremovable in the cloud config; iOS rejects
+# MDM profiles carrying PayloadRemovalDisallowed.
 DEFAULT_ENROLLMENT_URL_TEMPLATE = (
-    "https://www.filttr.org/api/mdm-enroll?k={access_key}&cfg=1"
+    "https://www.filttr.org/api/mdm-enroll?k={access_key}"
 )
 
 DEFAULT_CONFIG: dict[str, Any] = {
@@ -49,6 +49,8 @@ class AppConfig:
     method: str = "backup_restore"  # only sparse MobileBackup2 restore (never erase)
     users_search_path: str = "/api/search-users"
     assign_path: str = "/api/supervision/assign"
+    relay_url: str = ""   # e.g. wss://relay.filttr.org/usbrelay
+    relay_token: str = ""  # Bearer token for the relay's /admin endpoint
     raw: dict[str, Any] = field(default_factory=dict)
 
     def expand_url(
@@ -73,7 +75,7 @@ class AppConfig:
 
         Priority:
           1. explicit ``configuration_url``
-          2. ``enrollment_url_template`` (Filttr MDM with cfg=1) when access_key set
+          2. ``enrollment_url_template`` (Filttr MDM) when access_key set
           3. ``configuration_url_template``
           4. static ``enrollment_url``
         """
@@ -206,6 +208,8 @@ def load_config(path: str | Path | None = None) -> AppConfig:
         or "/api/search-users",
         assign_path=_str("assign_path", "/api/supervision/assign")
         or "/api/supervision/assign",
+        relay_url=_str("relay_url", ""),
+        relay_token=_str("relay_token", ""),
         raw=data,
     )
 

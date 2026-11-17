@@ -191,26 +191,24 @@ def build_mc_meta_plist(build_version: str = "") -> bytes:
     return plistlib.dumps({"LastMDMMigratedBuild": build_version or ""}, fmt=plistlib.FMT_BINARY)
 
 
-def build_removal_configuration(
-    organization_name: str = "Filttr",
-) -> dict[str, Any]:
+def build_removal_configuration() -> dict[str, Any]:
     """Build a cloud-configuration payload that clears supervision flags.
 
-    Used by the remove-supervision path. Does not include a supervisor cert.
-    Feasibility on a given iOS version must be verified on a real device.
+    Used by the remove-supervision path. The restore also relaunches Setup
+    Assistant, which starts MDM enrollment whenever a ConfigurationURL key is
+    present (even empty) — so it is omitted, along with the supervisor cert and
+    organization, and every "already done" flag is set so Setup finishes at once.
+    IsMDMUnremovable=False lets the user delete the MDM profile in Settings.
     """
     return {
         "AllowPairing": True,
         "AwaitDeviceConfigured": False,
         "CloudConfigurationUIComplete": True,
         "ConfigurationSource": 0,
-        "ConfigurationURL": "",
         "ConfigurationWasApplied": True,
         "IsMDMUnremovable": False,
         "IsMandatory": False,
         "IsSupervised": False,
-        "OrganizationName": organization_name,
-        "PostSetupProfileWasInstalled": False,
+        "PostSetupProfileWasInstalled": True,
         "SkipSetup": list(SKIP_SETUP),
-        "SupervisorHostCertificates": [],
     }

@@ -14,7 +14,7 @@ def test_load_defaults(tmp_path: Path) -> None:
     assert cfg.is_mdm_unremovable is True
     assert cfg.enrollment_url_template == DEFAULT_ENROLLMENT_URL_TEMPLATE
     assert "{access_key}" in cfg.enrollment_url_template
-    assert "cfg=1" in cfg.enrollment_url_template
+    assert "cfg=1" not in cfg.enrollment_url_template
 
 
 def test_enrollment_template_requires_access_key(tmp_path: Path) -> None:
@@ -28,7 +28,7 @@ def test_enrollment_template_requires_access_key(tmp_path: Path) -> None:
     assert cfg.require_access_key() is None
     assert (
         cfg.configuration_url_for()
-        == "https://www.filttr.org/api/mdm-enroll?k=abcKEY&cfg=1"
+        == "https://www.filttr.org/api/mdm-enroll?k=abcKEY"
     )
 
 

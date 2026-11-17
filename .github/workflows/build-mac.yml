@@ -1,0 +1,72 @@
+name: Build macOS Apps
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Python with tkinter
+        run: brew install python-tk@3.12
+
+      - name: Install dependencies
+        run: |
+          python3.12 -m pip install --upgrade pip
+          python3.12 -m pip install \
+            pyinstaller \
+            pymobiledevice3 \
+            websockets \
+            cryptography
+
+      - name: Build Filttr Supervise.app
+        run: python3.12 -m PyInstaller FilttrSupervise-mac.spec --noconfirm
+
+      - name: Build Filttr Agent.app
+        run: python3.12 -m PyInstaller filttr_supervise_agent_mac.spec --noconfirm
+
+      - name: Install create-dmg
+        run: brew install create-dmg
+
+      - name: Package Filttr Supervise.dmg
+        run: |
+          create-dmg \
+            --volname "Filttr Supervise" \
+            --window-size 540 380 \
+            --icon-size 128 \
+            --icon "Filttr Supervise.app" 130 190 \
+            --hide-extension "Filttr Supervise.app" \
+            --app-drop-link 410 190 \
+            "dist/Filttr Supervise.dmg" \
+            "dist/Filttr Supervise.app"
+
+      - name: Package Filttr Agent.dmg
+        run: |
+          create-dmg \
+            --volname "Filttr Agent" \
+            --window-size 540 380 \
+            --icon-size 128 \
+            --icon "Filttr Agent.app" 130 190 \
+            --hide-extension "Filttr Agent.app" \
+            --app-drop-link 410 190 \
+            "dist/Filttr Agent.dmg" \
+            "dist/Filttr Agent.app"
+
+      - name: Upload Filttr Supervise DMG
+        uses: actions/upload-artifact@v4
+        with:
+          name: Filttr-Supervise-mac
+          path: dist/Filttr Supervise.dmg
+
+      - name: Upload Filttr Agent DMG
+        uses: actions/upload-artifact@v4
+        with:
+          name: Filttr-Agent-mac
+          path: dist/Filttr Agent.dmg

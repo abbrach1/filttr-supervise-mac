@@ -130,6 +130,29 @@ def post_assign_device(
         return False, msg
 
 
+def post_unassign_device(
+    config: AppConfig,
+    *,
+    udid: str,
+    timeout: float = 15.0,
+) -> tuple[bool, str]:
+    """Best-effort unlink of a device that was unsupervised (DELETE assign_path). Non-fatal."""
+    path = (getattr(config, "assign_path", None) or "/api/supervision/assign").strip()
+    if not path.startswith("/"):
+        path = "/" + path
+    url = f"{config.api_base.rstrip('/')}{path}"
+    body = safe_json_bytes({"udid": udid})
+    req = urllib.request.Request(url, data=body, headers=_auth_headers(config), method="DELETE")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            text = resp.read().decode("utf-8", errors="replace")
+            return True, f"DELETE {url} -> HTTP {resp.status}: {text[:200]}"
+    except Exception as exc:
+        msg = f"Unlink DELETE {url} failed (non-fatal): {exc}"
+        logger.info(msg)
+        return False, msg
+
+
 def lookup_configuration_url(
     config: AppConfig,
     udid: str,
@@ -152,3 +175,39 @@ def lookup_configuration_url(
     except Exception as exc:
         logger.info("configuration_url lookup skipped: %s", exc)
     return None
+
+
+def validate_pin_code(
+    config: AppConfig,
+    pin: str,
+    timeout: float = 15.0,
+) -> tuple[bool, str]:
+    """Exchange a 6-digit setup PIN for an access key.
+
+    Returns (True, access_key) on success, or (False, error_message) on failure.
+    """
+    if not config.api_base or not pin:
+        return False, "Configuration missing or PIN empty"
+    base = config.api_base.rstrip("/")
+    url = f"{base}/api/validate-pin"
+    payload = safe_json_bytes({"pin": str(pin).strip()})
+    req = urllib.request.Request(url, data=payload, headers=_auth_headers(config), method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        if isinstance(data, dict):
+            if data.get("ok"):
+                access_key = data.get("accessKey") or ""
+                return True, access_key
+            return False, data.get("error") or "Validation failed"
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")[:200]
+        if exc.code in (401, 404):
+            return False, ("That code isn't valid. It may have expired or already been used — "
+                           "ask your admin for a new one.")
+        if exc.code == 429:
+            return False, "Too many attempts. Please wait a few minutes and try again."
+        return False, "Couldn't check your code right now. Please try again."
+    except Exception as exc:
+        logger.warning("PIN validation failed: %s", exc)
+        return False, "Couldn't reach Filttr. Check your internet connection and try again."

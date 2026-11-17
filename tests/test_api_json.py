@@ -40,6 +40,27 @@ def test_post_complete_with_cloud_bytes() -> None:
 
     class R:
         status = 200
+<<<<<<< Updated upstream
+=======
+        def read(self): return b"ok"
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+
+    def fake(req, timeout=0):
+        captured["body"] = json.loads(req.data)
+        return R()
+    captured = {}
+
+    class R:
+        status = 200
+        def read(self): return b"ok"
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+
+    def fake(req, timeout=0):
+        captured["body"] = json.loads(req.data)
+        return R()
+>>>>>>> Stashed changes
 
     with mock.patch.object(api.urllib.request, "urlopen", fake):
         ok, _ = api.post_supervision_complete(cfg, info.to_dict(), user={"user_id": "u"})
@@ -51,4 +72,8 @@ def test_post_complete_with_cloud_bytes() -> None:
 def test_restore_options_match_tech_lockdown() -> None:
     from filttr_supervise.supervise import SAFE_RESTORE_KWARGS as k
     assert k["system"] is False and k["reboot"] is True and k["copy"] is False
+<<<<<<< Updated upstream
     assert k["settings"] is True and k["remove"] is True
+=======
+    assert k["settings"] is True and k["remove"] is True
+>>>>>>> Stashed changes

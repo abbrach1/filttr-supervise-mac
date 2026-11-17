@@ -1,34 +1,26 @@
 """Build a minimal MobileBackup2 package containing only CloudConfigurationDetails.
 
 Layout mirrors Tech Lockdown's supervise.exe sparse-restore template exactly
-(verified by static analysis of its embedded backup assets):
+(verified by hex-dumping TL's actual Manifest.mbdb and Manifest.plist):
 
-* ``Manifest.db`` (SQLite, ``Files``/``Properties`` tables) whose ``file`` column is
-  an NSKeyedArchiver ``MBFile`` blob — required on modern iOS.
-* ``Manifest.mbdb`` (legacy index) kept alongside, as Tech Lockdown also ships one.
-* ``Manifest.plist``: BackupKeyBag, Date, IsEncrypted=false, Lockdown dict with the
-  connected device's BuildVersion/ProductType/SerialNumber/UniqueDeviceID,
-  SystemDomainsVersion=24.0, Version=10.0, WasPasscodeSet=true.
-* ``Status.plist``: BackupState=new, IsFullBackup=false, SnapshotState=finished,
-  Version=3.2.
+* ``Manifest.mbdb``: 14 entries — 8 directory + 6 file entries, all inode=0,
+  uid=501, gid=501, flags=4.
+* ``Manifest.plist``: only BackupKeyBag, Lockdown={}, SystemDomainsVersion=20.0,
+  Version=9.1.  No Date/IsEncrypted/WasPasscodeSet.
+* ``Status.plist``: Version=2.4, Date=epoch, UUID=zeros, BackupState=new,
+  IsFullBackup=false, SnapshotState=finished.
 * ``Info.plist``: ``{"Applications": {}}``.
-* Content at ``<id[:2]>/<id>`` (Manifest.db layout) and ``<id>`` (mbdb layout),
-  id = SHA-1(domain + "-" + relative_path).
-
-Entries: the configurationprofiles domain files (CloudConfigurationDetails +
-SetAside + MCMeta), plus HomeDomain and ManagedPreferencesDomain purplebuddy
-plists that trigger iOS to re-evaluate the cloud config on next reboot.
+* No Manifest.db (TL has none).
+* Content at ``<id>`` (mbdb layout), id = SHA-1(domain + "-" + relative_path).
 """
 from __future__ import annotations
 
 import base64
 import hashlib
 import plistlib
-import sqlite3
 import time
-import uuid
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
@@ -78,9 +70,10 @@ BACKUP_KEYBAG_B64 = (
     "Un6tTUd2TYCH3aLjCtlXS/L67IEmKzmJUQ=="
 )
 
-MANIFEST_VERSION = "10.0"
-SYSTEM_DOMAINS_VERSION = "24.0"
-STATUS_VERSION = "3.2"
+# Verified against TL's actual backup (hex dump + plistlib.load)
+MANIFEST_VERSION = "9.1"
+SYSTEM_DOMAINS_VERSION = "20.0"
+STATUS_VERSION = "2.4"
 
 S_IFDIR = 0o040000
 S_IFREG = 0o100000
@@ -136,47 +129,16 @@ def _entry_to_record(entry: BackupEntry) -> mbdb.MbdbRecord:
     )
 
 
-def mbfile_archive(entry: BackupEntry, ts: Optional[int] = None) -> bytes:
-    """NSKeyedArchiver MBFile blob for Manifest.db (same keys as Tech Lockdown)."""
-    ts = _now_ts() if ts is None else ts
-    obj = {
-        "LastModified": ts,
-        "Flags": 0,
-        "GroupID": entry.group,
-        "$class": plistlib.UID(3),
-        "LastStatusChange": ts,
-        "RelativePath": plistlib.UID(2),
-        "Birth": ts,
-        "Size": 0 if entry.is_dir else len(entry.contents or b""),
-        "InodeNumber": entry.inode,
-        "Mode": entry.effective_mode(),
-        "UserID": entry.owner,
-        "ProtectionClass": entry.protection_class,
-    }
-    archive = {
-        "$version": 100000,
-        "$archiver": "NSKeyedArchiver",
-        "$top": {"root": plistlib.UID(1)},
-        "$objects": [
-            "$null",
-            obj,
-            entry.relative_path,
-            {"$classname": "MBFile", "$classes": ["MBFile", "NSObject"]},
-        ],
-    }
-    return plistlib.dumps(archive, fmt=plistlib.FMT_BINARY)
-
-
 def build_cloud_config_entries(
     config: dict[str, Any],
     lockdown_info: Optional[dict] = None,
 ) -> list[BackupEntry]:
-    """Entries matching Tech Lockdown's Manifest.db rows (owner/mode/protection).
+    """Entries matching Tech Lockdown's Manifest.mbdb rows exactly.
 
-    Includes CloudConfigurationSetAsideDetails.plist and PublicInfo/MCMeta.plist
-    alongside the main CloudConfigurationDetails.plist, plus HomeDomain and
-    ManagedPreferencesDomain purplebuddy plists that set ForceShowCloudConfigurationUI=True
-    so iOS re-evaluates and applies the cloud config on next reboot.
+    Directory entries are required — TL's backup has 8 of them.
+    All entries: inode=0, uid=501, gid=501 (mobile), flags=4.
+    HomeDomain and ManagedPreferencesDomain files: mode=0o100777 (TL's value).
+    SysSharedContainerDomain files: mode=0o100644.
     """
     plist_bytes = build_cloud_configuration_details_plist(config)
     d = CLOUD_CONFIG_DOMAIN
@@ -188,48 +150,45 @@ def build_cloud_config_entries(
     pb_managed = build_purplebuddy_plist(extended=False)
     sp = build_setup_assistant_privacy_plist()
 
-    # Directory entries omitted — Tech Lockdown's backup contains only content
-    # files (6 SHA1 files). iOS creates parent directories automatically during
-    # a sparse restore.
-    return [
-        BackupEntry(d, CLOUD_CONFIG_RELATIVE_PATH, contents=plist_bytes,
-                    owner=501, group=-2, mode=0o100644, protection_class=4, inode=51802),
-        BackupEntry(d, CLOUD_CONFIG_SET_ASIDE_RELATIVE_PATH, contents=plist_bytes,
-                    owner=501, group=-2, mode=0o100644, protection_class=4, inode=51803),
-        BackupEntry(d, MC_META_RELATIVE_PATH, contents=build_mc_meta_plist(bv),
-                    owner=501, group=-2, mode=0o100644, protection_class=4, inode=51804),
-        BackupEntry(h, PURPLEBUDDY_RELATIVE_PATH, contents=pb_home, owner=501, group=-2,
-                    mode=0o100644, protection_class=4, inode=5),
-        BackupEntry(h, SETUP_ASSISTANT_PRIVACY_RELATIVE_PATH, contents=sp, owner=501, group=-2,
-                    mode=0o100644, protection_class=4, inode=6),
-        BackupEntry(m, MANAGED_PURPLEBUDDY_RELATIVE_PATH, contents=pb_managed, owner=501,
-                    group=-2, mode=0o100644, protection_class=4, inode=9),
+    # Directory entries (mode=0o40755), then file entries in each domain.
+    # Order matches TL's Manifest.mbdb entry order.
+    dirs_d = [
+        BackupEntry(d, "Library", owner=501, group=501, mode=0o40755, protection_class=4, inode=0),
+        BackupEntry(d, "Library/Caches", owner=501, group=501, mode=0o40755, protection_class=4, inode=0),
+        BackupEntry(d, "Library/ConfigurationProfiles", owner=501, group=501, mode=0o40755, protection_class=4, inode=0),
+        BackupEntry(d, "Library/ConfigurationProfiles/PublicInfo", owner=501, group=501, mode=0o40755, protection_class=4, inode=0),
+        BackupEntry(d, "Library/Preferences", owner=501, group=501, mode=0o40755, protection_class=4, inode=0),
     ]
-
-
-def _write_manifest_db(path: Path, entries: list[BackupEntry]) -> None:
-    if path.exists():
-        path.unlink()
-    con = sqlite3.connect(str(path))
-    try:
-        con.executescript(
-            "CREATE TABLE Files (fileID TEXT PRIMARY KEY, domain TEXT, relativePath TEXT, "
-            "flags INTEGER, file BLOB);"
-            "CREATE INDEX FilesDomainIdx ON Files(domain);"
-            "CREATE INDEX FilesRelativePathIdx ON Files(relativePath);"
-            "CREATE INDEX FilesFlagsIdx ON Files(flags);"
-            "CREATE TABLE Properties (key TEXT PRIMARY KEY, value BLOB);"
-        )
-        ts = _now_ts()
-        for e in entries:
-            con.execute(
-                "INSERT INTO Files VALUES (?,?,?,?,?)",
-                (file_id_for(e.domain, e.relative_path), e.domain, e.relative_path,
-                 2 if e.is_dir else 1, mbfile_archive(e, ts)),
-            )
-        con.commit()
-    finally:
-        con.close()
+    dirs_h = [
+        BackupEntry(h, "Library", owner=501, group=501, mode=0o40755, protection_class=4, inode=0),
+        BackupEntry(h, "Library/Preferences", owner=501, group=501, mode=0o40755, protection_class=4, inode=0),
+    ]
+    dirs_m = [
+        BackupEntry(m, "mobile", owner=501, group=501, mode=0o40755, protection_class=4, inode=0),
+    ]
+    return (
+        dirs_d
+        + [
+            BackupEntry(d, CLOUD_CONFIG_RELATIVE_PATH, contents=plist_bytes,
+                        owner=501, group=501, mode=0o100644, protection_class=4, inode=0),
+            BackupEntry(d, CLOUD_CONFIG_SET_ASIDE_RELATIVE_PATH, contents=plist_bytes,
+                        owner=501, group=501, mode=0o100644, protection_class=4, inode=0),
+            BackupEntry(d, MC_META_RELATIVE_PATH, contents=build_mc_meta_plist(bv),
+                        owner=501, group=501, mode=0o100644, protection_class=4, inode=0),
+        ]
+        + dirs_h
+        + [
+            BackupEntry(h, PURPLEBUDDY_RELATIVE_PATH, contents=pb_home,
+                        owner=501, group=501, mode=0o100777, protection_class=4, inode=0),
+            BackupEntry(h, SETUP_ASSISTANT_PRIVACY_RELATIVE_PATH, contents=sp,
+                        owner=501, group=501, mode=0o100777, protection_class=4, inode=0),
+        ]
+        + dirs_m
+        + [
+            BackupEntry(m, MANAGED_PURPLEBUDDY_RELATIVE_PATH, contents=pb_managed,
+                        owner=501, group=501, mode=0o100777, protection_class=4, inode=0),
+        ]
+    )
 
 
 def write_backup_package(
@@ -248,40 +207,30 @@ def write_backup_package(
         if entry.contents is None:
             continue
         fid = file_id_for(entry.domain, entry.relative_path)
-        (device_dir / fid[:2]).mkdir(exist_ok=True)
-        (device_dir / fid[:2] / fid).write_bytes(entry.contents)
+        # Flat mbdb layout — no Manifest.db, no subdir needed.
         (device_dir / fid).write_bytes(entry.contents)
 
-    _write_manifest_db(device_dir / "Manifest.db", entries)
     (device_dir / "Manifest.mbdb").write_bytes(
         mbdb.Mbdb(records=[_entry_to_record(e) for e in entries]).to_bytes()
     )
 
-    now = datetime.now(timezone.utc).replace(microsecond=0, tzinfo=None)
+    # Status.plist: match TL exactly — epoch date, zero UUID.
     status = {
         "BackupState": "new",
-        "Date": now,
+        "Date": datetime(1970, 1, 1, 0, 0),
         "IsFullBackup": False,
         "SnapshotState": "finished",
-        "UUID": str(uuid.uuid4()).upper(),
+        "UUID": "00000000-0000-0000-0000-000000000000",
         "Version": STATUS_VERSION,
     }
     (device_dir / "Status.plist").write_bytes(plistlib.dumps(status, fmt=plistlib.FMT_BINARY))
 
-    li = lockdown_info or {}
+    # Manifest.plist: only BackupKeyBag + Lockdown={} + versions (TL has no Date/IsEncrypted/WasPasscodeSet).
     manifest = {
         "BackupKeyBag": base64.b64decode(BACKUP_KEYBAG_B64),
-        "Date": now,
-        "IsEncrypted": False,
-        "Lockdown": {
-            "BuildVersion": li.get("BuildVersion", ""),
-            "ProductType": li.get("ProductType", ""),
-            "SerialNumber": li.get("SerialNumber", ""),
-            "UniqueDeviceID": li.get("UniqueDeviceID", ""),
-        },
+        "Lockdown": {},
         "SystemDomainsVersion": SYSTEM_DOMAINS_VERSION,
         "Version": MANIFEST_VERSION,
-        "WasPasscodeSet": True,
     }
     (device_dir / "Manifest.plist").write_bytes(plistlib.dumps(manifest))
     (device_dir / "Info.plist").write_bytes(plistlib.dumps({"Applications": {}}))

@@ -54,7 +54,7 @@ def test_validate_find_my_and_activation() -> None:
 
 
 def test_supervise_source_has_no_erase_or_mcinstall_set() -> None:
-    src = (ROOT / "filttr_supervise" / "supervise.py").read_text()
+    src = (ROOT / "filttr_supervise" / "supervise.py").read_text(encoding="utf-8")
     tree = ast.parse(src)
     calls: list[str] = []
     for node in ast.walk(tree):
@@ -82,12 +82,15 @@ def test_supervise_source_has_no_erase_or_mcinstall_set() -> None:
 
 
 def test_safe_restore_kwargs_preserve_data() -> None:
-    assert SAFE_RESTORE_KWARGS["remove"] is False
+    # remove=True is scoped to our one backup domain — it is what makes the device
+    # actually apply the injected file instead of no-oping the restore.
+    assert SAFE_RESTORE_KWARGS["remove"] is True
     assert SAFE_RESTORE_KWARGS["settings"] is True  # RestorePreserveSettings
     assert SAFE_RESTORE_KWARGS["skip_apps"] is True
     assert SAFE_RESTORE_KWARGS["copy"] is False
-    # system=True only applies files from our sparse package (one plist), not IPSW
-    assert SAFE_RESTORE_KWARGS["system"] is True
+    # system=False: our file lives in a shared-container domain, not a system-files
+    # domain. True triggers a device-wide system restore and can sign iCloud out.
+    assert SAFE_RESTORE_KWARGS["system"] is False
 
 
 def test_supervise_flow_never_calls_erase(tmp_path: Path) -> None:
@@ -187,9 +190,9 @@ def test_supervise_flow_never_calls_erase(tmp_path: Path) -> None:
     assert result.ok, result.log
     assert restore_calls, "restore was not called"
     kwargs = restore_calls[0]
-    assert kwargs.get("remove") is False
+    assert kwargs.get("remove") is True
     assert kwargs.get("settings") is True
-    assert kwargs.get("system") is True
+    assert kwargs.get("system") is False
     assert kwargs.get("skip_apps") is True
     assert erase_calls == []
     assert result.method == "backup_restore"

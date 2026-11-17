@@ -1,12 +1,19 @@
-.venv/
-__pycache__/
-*.py[cod]
-.pytest_cache/
-out-dry-run/
+# Build output
 dist/
 build/
 *.egg-info/
-*.key
-.release/
-release/
+__pycache__/
+*.pyc
+*.pyo
+
+# PyInstaller
 *.spec.bak
+
+# Secrets & certs
+config.json
+assets/filttr-supervisor.der
+assets/filttr-supervisor.crt
+
+# Dev
+.env
+*.log

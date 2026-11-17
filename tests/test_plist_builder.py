@@ -100,4 +100,11 @@ def test_resolve_configuration_url_template() -> None:
 def test_removal_payload_keys() -> None:
     cfg = build_removal_configuration()
     assert cfg["IsSupervised"] is False
-    assert set(cfg.keys()) == REFERENCE_KEYS
+    assert cfg["IsMDMUnremovable"] is False
+    assert cfg["ConfigurationSource"] == 0
+    assert cfg["CloudConfigurationUIComplete"] is True
+    assert cfg["PostSetupProfileWasInstalled"] is True
+    # These would make Setup Assistant try to enroll / show an organization.
+    for key in ("ConfigurationURL", "SupervisorHostCertificates", "OrganizationName"):
+        assert key not in cfg
+    assert set(cfg.keys()) < REFERENCE_KEYS

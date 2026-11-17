@@ -4,6 +4,18 @@ The MBDB binary layout is a long-standing, publicly documented part of iTunes /
 MobileBackup2 backups (magic ``mbdb\\x05\\x00``, length-prefixed strings, etc.).
 This module only *writes* records needed for a one-file synthetic restore; it is
 not a full backup library.
+
+Record fixed-field layout (40 bytes, verified from Tech Lockdown's actual backup):
+  mode     H  (2)  — file type + permissions
+  inode    Q  (8)  — inode number (0 for all entries in sparse restores)
+  user_id  I  (4)
+  group_id I  (4)
+  mtime    I  (4)
+  atime    I  (4)
+  ctime    I  (4)
+  size     Q  (8)  — 0 for directories
+  flags    B  (1)  — protection class
+  nprops   B  (1)  — number of extended properties
 """
 from __future__ import annotations
 
@@ -32,8 +44,6 @@ class MbdbRecord:
     hash: bytes = b""
     key: bytes = b""
     mode: int = 0o100644
-    unknown2: int = 0
-    unknown3: int = 0
     inode: int = 0
     user_id: int = 0
     group_id: int = 0
@@ -52,8 +62,6 @@ class MbdbRecord:
         out += _write_data(self.hash)
         out += _write_data(self.key)
         out += struct.pack(">H", self.mode & 0xFFFF)
-        out += struct.pack(">I", self.unknown2 & 0xFFFFFFFF)
-        out += struct.pack(">I", self.unknown3 & 0xFFFFFFFF)
         out += struct.pack(">Q", self.inode & 0xFFFFFFFFFFFFFFFF)
         out += struct.pack(">I", self.user_id & 0xFFFFFFFF)
         out += struct.pack(">I", self.group_id & 0xFFFFFFFF)
