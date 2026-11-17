@@ -17,20 +17,21 @@ jobs:
       - name: Install Python with tkinter
         run: brew install python-tk@3.12
 
-      - name: Install dependencies
+      - name: Set up virtualenv and install dependencies
         run: |
-          python3.12 -m pip install --upgrade pip
-          python3.12 -m pip install \
+          python3.12 -m venv .venv
+          .venv/bin/pip install --upgrade pip
+          .venv/bin/pip install \
             pyinstaller \
             pymobiledevice3 \
             websockets \
             cryptography
 
       - name: Build Filttr Supervise.app
-        run: python3.12 -m PyInstaller FilttrSupervise-mac.spec --noconfirm
+        run: .venv/bin/python -m PyInstaller FilttrSupervise-mac.spec --noconfirm
 
       - name: Build Filttr Agent.app
-        run: python3.12 -m PyInstaller filttr_supervise_agent_mac.spec --noconfirm
+        run: .venv/bin/python -m PyInstaller filttr_supervise_agent_mac.spec --noconfirm
 
       - name: Install create-dmg
         run: brew install create-dmg
