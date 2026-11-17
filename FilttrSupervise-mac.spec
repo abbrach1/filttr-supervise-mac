@@ -5,8 +5,6 @@ from PyInstaller.utils.hooks import collect_all, collect_submodules
 block_cipher = None
 
 datas = [
-    ('assets/filttr-supervisor.der', 'assets'),
-    ('assets/filttr-supervisor.crt', 'assets'),
     ('assets/filttr-icon-64.png', 'assets'),
     ('assets/filttr-mark-40.png', 'assets'),
     ('assets/filttr-wordmark-30.png', 'assets'),
